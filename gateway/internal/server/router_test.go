@@ -130,7 +130,7 @@ func TestRouting_CadaPrefijoVaASuServicio(t *testing.T) {
 		"/api/v1/training/plans":        gwconfig.Training,
 		"/partner-api/v1/benefits":      gwconfig.Benefits,
 		"/api/v1/nutrition/plans/7":     gwconfig.Training,
-		"/api/v1/check-ins":              gwconfig.Booking,
+		"/api/v1/check-ins":             gwconfig.Booking,
 		"/api/v1/activities":            gwconfig.Booking,
 		"/api/v1/users/../memberships/": gwconfig.Members,
 	}
