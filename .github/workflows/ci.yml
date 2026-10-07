@@ -39,6 +39,15 @@ jobs:
         run: go vet ./...
 
       - name: golangci-lint
+        id: golangci_lint
+        uses: golangci/golangci-lint-action@v8
+        continue-on-error: true
+        with:
+          version: v2.1.6
+          working-directory: ${{ matrix.module }}
+
+      - name: golangci-lint (reintento)
+        if: steps.golangci_lint.outcome == 'failure'
         uses: golangci/golangci-lint-action@v8
         with:
           version: v2.1.6
