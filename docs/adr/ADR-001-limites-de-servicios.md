@@ -95,7 +95,7 @@ flowchart LR
     training -- "sync: ¿alumno asignado?" --> members
     benefits -- "sync: validar alumno al vincular" --> members
     members -. "membresia.activada" .-> notif
-    booking -. "asistencia.registrada" .-> benefits
+    booking -. "asistencia.registrada / inasistencia.registrada" .-> benefits
     members -. "membresia.cancelada / usuario.desactivado" .-> booking
 ```
 
@@ -104,7 +104,7 @@ Relación de tipo **cliente–proveedor**: members es proveedor ascendente (upst
 ### Por qué no más servicios
 
 - **Membresías separadas de usuarios:** la vigencia depende del alumno y su estado (ACTIVO/INACTIVO); separarlos agrega una llamada sin ganar independencia.
-- **Asistencia separada de reservas:** rompería la transición atómica `CONFIRMADA → ASISTIDA` y la ventana de asistencia.
+- **Asistencia separada de reservas:** rompería la transición atómica `CONFIRMADA → ASISTIDA` que ocurre al validar el ingreso mediante DNI.
 - **Nutrición separada de entrenamiento:** comparten actor (alumno asignado), almacenamiento y patrón; el volumen no lo justifica. Se puede extraer más adelante si crece.
 - **Servicio de autenticación separado:** login y usuarios comparten datos (credenciales, rol, estado); el gateway ya concentra la validación del token.
 - **Partners separados de benefits:** la API de partners **es** el ledger; separarla obligaría a coordinar débitos entre servicios.
