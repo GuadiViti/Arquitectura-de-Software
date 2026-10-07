@@ -71,7 +71,7 @@ Dentro del alcance de esta especificación:
 | ID | Supuesto |
 |---|---|
 | S-01 | Existe una única sede y una única zona horaria de referencia: **America/Argentina/Buenos_Aires**. Todas las fechas y horas de negocio ("hoy", "futura", "vence hoy") se evalúan en esa zona. |
-| S-02 | Musculación tiene **4 turnos por día**, de lunes a domingo: **Mañana 08:00–12:00**, **Siesta 12:00–16:00**, **Tarde 16:00–19:30** y **Noche 19:30–23:00**. El administrador puede cancelar un turno puntual. |
+| S-02 | Musculación funciona de lunes a domingo entre **08:00 y 23:00**, con **7 turnos reservables de 2 horas por día**: 08:00–10:00, 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00 y 20:00–22:00. El administrador puede cancelar un turno puntual. |
 | S-03 | Las clases del resto de las actividades duran lo que defina su horario (por defecto 60 minutos). |
 | S-04 | Una membresía es **vigente** durante todo el día de su fecha de vencimiento (hasta las 23:59:59 de ese día). |
 | S-05 | Para reservar, la membresía debe estar vigente **al momento de reservar y en la fecha de la clase**. |
@@ -104,7 +104,7 @@ Dentro del alcance de esta especificación:
 | **Actividad** | Disciplina ofrecida por el gimnasio (Musculación, Funcional, GAP, Strong Nation, Zumba). Define capacidad máxima y puntos por asistencia. |
 | **Horario** | Plantilla recurrente de una actividad: día de la semana, hora de inicio, duración, capacidad y profesor responsable. A partir de los horarios se generan clases. |
 | **Clase** | Instancia concreta de una actividad en una fecha y hora determinadas, con capacidad y un profesor responsable. Es lo que se reserva. |
-| **Turno** | Nombre que recibe una clase de **Musculación**: una de las 4 franjas diarias (Mañana, Siesta, Tarde, Noche) dentro de 08:00–23:00, capacidad máxima 50. A efectos del sistema, un turno **es** una clase. |
+| **Turno** | Nombre que recibe una clase de **Musculación**: una de las 7 franjas diarias de 2 horas dentro de 08:00–23:00, con capacidad máxima 50. A efectos del sistema, un turno **es** una clase. |
 | **Capacidad** | Cantidad máxima de reservas activas que admite una clase. Nunca supera el máximo de la actividad (50 Musculación, 30 el resto). |
 | **Ocupación** | Cantidad de reservas activas de una clase. Se muestra como `ocupados/capacidad - disponibles` (ej.: `21/30 ocupados - 9 disponibles`). |
 | **Cupo** | Lugar disponible en una clase: `cupo disponible = capacidad − ocupación`. "Hay cupo" ⇔ cupo disponible > 0. |
@@ -198,7 +198,7 @@ Dentro del alcance de esta especificación:
 - Consultar el **catálogo de beneficios** habilitado para canje vía partner.
 - Todas las operaciones de escritura son **idempotentes** por identificador de operación.
 
-### 3.6 Sistema (actor temporal / interno)
+### 3.6 Procesos automáticos del sistema
 
 - **Vencer membresías** automáticamente al terminar el día de vencimiento.
 - **Pasar clases** a EN_CURSO y FINALIZADA según su horario.
@@ -269,9 +269,9 @@ Reglas: RN-07, RN-08, RN-20.
 *Como administrador, quiero definir horarios recurrentes y generar las clases, para que los alumnos puedan reservar.*
 Reglas: RN-07, RN-08, RN-09, RN-10.
 
-- **CA-07.1** Dado el horario de Musculación, cuando se generan las clases de una semana, entonces existen 4 turnos por día (Mañana 08:00–12:00, Siesta 12:00–16:00, Tarde 16:00–19:30, Noche 19:30–23:00), cada uno con capacidad 50.
+- **CA-07.1** Dado el horario de Musculación, cuando se generan las clases de una semana, entonces existen 7 turnos de 2 horas por día (08:00–10:00, 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00 y 20:00–22:00), cada uno con capacidad 50.
 - **CA-07.2** Dado un horario de Zumba los martes 19:00 de 60 minutos, cuando se generan las clases del mes, entonces se crea una clase PROGRAMADA por cada martes con capacidad ≤ 30 y el profesor responsable indicado.
-- **CA-07.3** Dado un turno de Musculación que no coincide con una de las 4 franjas (ej.: 22:30–23:30), cuando se intenta crear, entonces se rechaza.
+- **CA-07.3** Dado un turno de Musculación que no coincide con una de las 7 franjas de 2 horas (ej.: 22:30–23:30), cuando se intenta crear, entonces se rechaza.
 - **CA-07.4** Dado un profesor con una clase de 19:00 a 20:00, cuando se le asigna otra clase que se superpone, entonces se rechaza.
 - **CA-07.6** Dado un profesional de subtipo NUTRICIONISTA, cuando se lo intenta asignar como responsable de un horario o una clase, entonces se rechaza.
 - **CA-07.5** Dado que ya existen clases generadas para un período, cuando se regenera el mismo período, entonces no se duplican clases.
@@ -351,9 +351,9 @@ Reglas: RN-01, RN-12, RN-13, RN-14, RN-15, RN-16, RN-39, RN-40.
 - **CA-14.6** Dado que el alumno ya tiene una reserva activa en la clase, cuando intenta reservar de nuevo con otra solicitud, entonces se rechaza con el motivo "reserva duplicada".
 - **CA-14.7** Dado que el alumno envía dos veces la misma solicitud (misma clave de idempotencia), cuando el sistema procesa ambas, entonces existe una sola reserva y ambas respuestas devuelven la misma reserva.
 - **CA-14.8** Dado un único lugar disponible y dos alumnos que reservan simultáneamente, cuando se procesan, entonces exactamente uno obtiene la reserva y el otro recibe "sin cupo"; la ocupación nunca supera la capacidad.
-- **CA-14.9** Dado un alumno con reserva CONFIRMADA en el turno Mañana de Musculación del 09/10, cuando intenta reservar el turno Tarde del 09/10, entonces se rechaza con el motivo "ya tiene un turno de Musculación ese día".
-- **CA-14.10** Dado el caso anterior, cuando el alumno cancela el turno Mañana y luego reserva el turno Tarde, entonces la reserva se acepta.
-- **CA-14.11** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00, cuando intenta reservar Funcional de 19:30 a 20:30 o el turno Noche de Musculación (19:30–23:00), entonces se rechaza con el motivo "superposición con otra reserva".
+- **CA-14.9** Dado un alumno con reserva CONFIRMADA en el turno 08:00–10:00 de Musculación del 09/10, cuando intenta reservar el turno 16:00–18:00 del 09/10, entonces se rechaza con el motivo "ya tiene un turno de Musculación ese día".
+- **CA-14.10** Dado el caso anterior, cuando el alumno cancela el turno 08:00–10:00 y luego reserva el turno 16:00–18:00, entonces la reserva se acepta.
+- **CA-14.11** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00, cuando intenta reservar Funcional de 19:30 a 20:30 o el turno de Musculación de 20:00 a 22:00, entonces se rechaza con el motivo "superposición con otra reserva".
 - **CA-14.12** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00, cuando reserva GAP de 20:00 a 21:00, entonces se acepta (no hay superposición).
 
 #### HU-15 — Cancelar una reserva
@@ -471,10 +471,10 @@ Reglas: RN-30, RN-37.
 - **CA-34.3** Dada una consulta de un alumno que no es su paciente, cuando el nutricionista intenta verla o responderla, entonces se rechaza.
 - **CA-34.4** Dada una consulta ya RESPONDIDA, cuando se intenta responder otra vez, entonces se rechaza (el alumno puede enviar una consulta nueva).
 
-### 4.4 Sistema
+### 4.4 Procesos automáticos del sistema
 
 #### HU-26 — Acreditar puntos por asistencia
-*Como sistema, quiero acreditar puntos ante cada asistencia confirmada, para premiar la constancia.*
+*Como proceso automático del sistema, quiero acreditar puntos ante cada asistencia confirmada, para premiar la constancia.*
 Reglas: RN-20, RN-21, RN-22.
 
 - **CA-26.1** Dada una asistencia ASISTIÓ de Zumba, cuando se procesa, entonces se crea un movimiento CONFIRMADO de +10 con motivo "Asistencia Zumba <fecha hora>" vinculado a esa asistencia.
@@ -482,14 +482,14 @@ Reglas: RN-20, RN-21, RN-22.
 - **CA-26.3** Dado que el Club de Beneficios no está disponible al registrar la asistencia, cuando vuelve a estar disponible, entonces la acreditación se realiza (consistencia eventual), sin perder ni duplicar puntos.
 
 #### HU-27 — Vencer membresías automáticamente
-*Como sistema, quiero vencer las membresías al terminar su período, para que el estado refleje la realidad.*
+*Como proceso automático del sistema, quiero vencer las membresías al terminar su período, para que el estado refleje la realidad.*
 Reglas: RN-01, RN-03.
 
 - **CA-27.1** Dada una membresía ACTIVA con vencimiento hoy, cuando termina el día (00:00 del día siguiente), entonces pasa a VENCIDA.
 - **CA-27.2** Dada una membresía ACTIVA con vencimiento hoy, cuando el alumno reserva hoy una clase de hoy, entonces la reserva se acepta.
 
 #### HU-28 — Enviar email de confirmación de membresía
-*Como sistema, quiero notificar al alumno cuando se asigna o renueva su membresía, para que tenga constancia.*
+*Como proceso automático del sistema, quiero notificar al alumno cuando se asigna o renueva su membresía, para que tenga constancia.*
 Reglas: RN-05.
 
 - **CA-28.1** Dada una membresía asignada o renovada, cuando se confirma la operación, entonces se envía de forma asíncrona un email con tipo, inicio y vencimiento al email del alumno.
@@ -549,7 +549,7 @@ Reglas: RN-26.
 
 | ID | Regla |
 |---|---|
-| **RN-07** | **Musculación.** Funciona de 08:00 a 23:00 con **4 turnos reservables por día**: Mañana 08:00–12:00, Siesta 12:00–16:00, Tarde 16:00–19:30 y Noche 19:30–23:00. No se crean turnos fuera de esas franjas. Capacidad máxima por turno: **50**. |
+| **RN-07** | **Musculación.** Funciona de 08:00 a 23:00 con **7 turnos reservables de 2 horas por día**: 08:00–10:00, 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00 y 20:00–22:00. No se crean turnos fuera de esas franjas. Capacidad máxima por turno: **50**. |
 | **RN-08** | **Otras actividades y responsables.** Funcional, GAP, Strong Nation, Zumba (y nuevas actividades) tienen días y horarios configurables. Capacidad máxima por clase: **30**. El responsable de un horario o clase debe ser un **PROFESOR** ACTIVO (nunca un nutricionista) y no puede ser responsable de dos clases que se superpongan en el tiempo. |
 | **RN-09** | **Generación de clases.** Las clases se generan a partir de horarios para un período. Generar dos veces el mismo período no duplica clases (una actividad no puede tener dos clases con la misma fecha-hora de inicio). |
 | **RN-10** | **Capacidad de clase.** `1 ≤ capacidad ≤ máximo de la actividad`. No puede reducirse por debajo de la ocupación actual. Solo se modifica en clases PROGRAMADA. |
@@ -631,7 +631,7 @@ Reglas: RN-26.
 | **TipoMembresía** | id, nombre, duración (en días o meses), estado |
 | **Membresía** | id, alumno, tipo, fecha de inicio, fecha de vencimiento, estado (ACTIVA/VENCIDA/CANCELADA), motivo de cancelación, membresía anterior (si es renovación), fecha de creación |
 | **Actividad** | id, nombre, descripción, capacidad máxima (50/30), puntos por asistencia (5/10), estado |
-| **Horario** | id, actividad, día de semana, hora de inicio, duración, franja (Mañana/Siesta/Tarde/Noche, solo Musculación), capacidad, profesor responsable, vigente desde/hasta |
+| **Horario** | id, actividad, día de semana, hora de inicio, duración, franja de 2 horas (solo Musculación), capacidad, profesor responsable, vigente desde/hasta |
 | **Clase** (turno en Musculación) | id, actividad, horario de origen (opcional), fecha, hora de inicio, hora de fin, franja (solo Musculación), capacidad, profesor responsable, estado (PROGRAMADA/EN_CURSO/FINALIZADA/CANCELADA), motivo de cancelación |
 | **Reserva** | id, alumno, clase, fecha-hora de creación, estado (CONFIRMADA/CANCELADA/ASISTIDA/AUSENTE/SIN_REGISTRO), fecha-hora y motivo de cancelación, clave de idempotencia |
 | **Asistencia** | id, reserva, resultado (ASISTIÓ/AUSENTE), registrada por (profesor o administrador), fecha-hora de registro, regularización (sí/no: registrada por el admin sobre una reserva SIN_REGISTRO) |
@@ -942,7 +942,7 @@ stateDiagram-v2
 
 | Campo | Detalle |
 |---|---|
-| Actor | Sistema (disparado por CU-03) |
+| Disparador | Proceso automático del sistema (disparado por CU-03) |
 | Precondiciones | Existe una asistencia ASISTIÓ. |
 | Reglas | RN-20, RN-21, RN-22 |
 
@@ -1018,7 +1018,7 @@ stateDiagram-v2
 | **Renovar membresía** | Igual que asignar; inicio calculado según RN-02. | Solapamiento |
 | **Cancelar membresía** | Estado ACTIVA; motivo obligatorio. | Transición inválida |
 | **Alta/modificación de actividad** | Nombre único; capacidad máxima ≤ tope (50 Musculación / 30 resto) y ≥ 1; puntos por asistencia ≥ 0 entero. | Datos inválidos |
-| **Alta de horario / clase** | Actividad ACTIVA; responsable PROFESOR ACTIVO (no nutricionista); capacidad 1..máximo; duración > 0; Musculación solo en una de las 4 franjas (Mañana, Siesta, Tarde, Noche); sin superposición para el profesor; sin clase duplicada (actividad + inicio). | Datos inválidos / responsable inválido / superposición / duplicado |
+| **Alta de horario / clase** | Actividad ACTIVA; responsable PROFESOR ACTIVO (no nutricionista); capacidad 1..máximo; duración > 0; Musculación solo en una de las 7 franjas de 2 horas (08:00–10:00, 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00); sin superposición para el profesor; sin clase duplicada (actividad + inicio). | Datos inválidos / responsable inválido / superposición / duplicado |
 | **Modificar capacidad de clase** | Clase PROGRAMADA; nueva capacidad ≥ ocupación y ≤ máximo. | Capacidad inválida |
 | **Cancelar clase** | Clase PROGRAMADA (no iniciada); motivo obligatorio. | Transición inválida |
 | **Reservar** | Alumno ACTIVO; membresía vigente hoy y en la fecha de la clase; clase PROGRAMADA y futura; cupo > 0; sin reserva CONFIRMADA previa en la clase; si es Musculación, sin otra reserva CONFIRMADA o ASISTIDA de Musculación ese día; sin otra reserva CONFIRMADA superpuesta en horario; clave de idempotencia no usada con otra clase. | Membresía no vigente / clase no futura / clase cancelada / sin cupo / reserva duplicada / ya tiene turno de Musculación ese día / superposición con otra reserva |
@@ -1076,7 +1076,7 @@ stateDiagram-v2
 
 ## 11. Criterios de aceptación del flujo principal de punta a punta
 
-> Escenario base: hoy es **07/10/2026 10:00**. Existe la actividad Funcional (capacidad máx. 30, 10 puntos) y Musculación (4 turnos diarios, máx. 50, 5 puntos). Existe un profesor **P**, una nutricionista **N** y un partner **X**.
+> Escenario base: hoy es **07/10/2026 10:00**. Existe la actividad Funcional (capacidad máx. 30, 10 puntos) y Musculación (7 turnos diarios de 2 horas, máx. 50, 5 puntos). Existe un profesor **P**, una nutricionista **N** y un partner **X**.
 
 ### E2E-01 — Del alta a los puntos
 
@@ -1155,7 +1155,7 @@ stateDiagram-v2
 
 ### E2E-07 — Reserva sin registro y regularización
 
-**Dado** que A tiene reserva CONFIRMADA en el turno Noche de Musculación del 09/10 (19:30–23:00) y P no registra asistencia
+**Dado** que A tiene reserva CONFIRMADA en el turno de Musculación de 20:00–22:00 del 09/10 y P no registra asistencia
 **Cuando** llegan las 00:00 del 10/10 (1 h después del fin)
 **Entonces** la reserva pasa a SIN_REGISTRO, A no recibe puntos y P ya no puede registrarla.
 **Cuando** el administrador la registra como ASISTIÓ el 12/10
@@ -1219,7 +1219,7 @@ stateDiagram-v2
 
 | ID | Tema | Decisión | Dónde impacta |
 |---|---|---|---|
-| D-01 | Turnos de Musculación | De 08:00 a 23:00 (como dice el enunciado), con 4 turnos por día, todos los días: Mañana 08:00–12:00, Siesta 12:00–16:00, Tarde 16:00–19:30, Noche 19:30–23:00. Máx. 50 alumnos por turno. | S-02, RN-07, HU-07 |
+| D-01 | Turnos de Musculación | De 08:00 a 23:00, con 7 turnos reservables de 2 horas por día, todos los días: 08:00–10:00, 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00 y 20:00–22:00. La última hora de apertura no genera un turno. Máx. 50 alumnos por turno. | S-02, RN-07, HU-07 |
 | D-02 | Cancelación de reservas | Hasta 10 minutos antes del inicio. Sin otro límite de reservas que D-17 y D-18. | S-06, RN-17, CU-02, CL-04b |
 | D-03 | Vigencia para reservar | La membresía debe estar vigente al reservar y en la fecha de la clase. | S-05, RN-12, CL-03b |
 | D-04 | Ventana de asistencia | El profesor registra desde el inicio hasta 1 h después del fin. No modifica lo registrado; las correcciones de puntos se hacen por reversión del admin. | S-08, RN-19, RN-25, HU-22 |

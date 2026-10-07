@@ -14,7 +14,7 @@ Trabajo Práctico Integrador de **Arquitectura de Software**: un sistema de micr
 | **Alumno** | Reserva clases, consulta su membresía, planes, mediciones y puntos; canjea beneficios. |
 | **Partner externo** | Sistema de otro grupo que acredita, debita, canjea y consulta puntos por API. |
 
-Actividades: **Musculación** (4 turnos diarios entre 08:00 y 23:00, hasta 50 alumnos) y **Funcional, GAP, Strong Nation y Zumba** (horarios configurables, hasta 30 alumnos). La asistencia confirmada suma puntos: 5 en Musculación, 10 en el resto.
+Actividades: **Musculación** (7 turnos diarios de 2 horas entre 08:00 y 22:00, dentro del horario de apertura 08:00–23:00, hasta 50 alumnos) y **Funcional, GAP, Strong Nation y Zumba** (horarios configurables, hasta 30 alumnos). La asistencia confirmada suma puntos: 5 en Musculación, 10 en el resto.
 
 ## Objetivo
 
