@@ -15,7 +15,7 @@ Trabajo Práctico Integrador de **Arquitectura de Software**: METALFITNESS es un
 
 Actividades: **Musculación** (7 turnos diarios de 2 horas entre 08:00 y 22:00, dentro del horario de apertura 08:00–23:00, hasta 50 alumnos) y **Funcional, GAP, Strong Nation y Zumba** (horarios configurables, hasta 30 alumnos). Cada clase asistida suma **500 puntos**; una reserva confirmada no asistida descuenta hasta **100 puntos**, sin saldo negativo. Las reservas se pueden cancelar hasta **1 hora antes** del inicio.
 
-El Club de Beneficios expone una API pública para integraciones externas. Los sistemas de otros grupos no son usuarios ni roles del gimnasio: se autentican con API key y solo operan sobre cuentas de alumnos previamente vinculadas por un administrador.
+El Club de Beneficios expone una API pública para integraciones externas. Los sistemas de otros grupos no son usuarios ni roles del gimnasio: se autentican con API key y solo operan sobre cuentas de alumnos previamente vinculadas por un administrador. METALFITNESS envía directamente al alumno los emails de confirmación, recordatorio 10 días antes y advertencia el día del vencimiento de su membresía; el partner no interviene en esas notificaciones.
 
 ## Objetivo
 
@@ -62,7 +62,7 @@ El detalle completo, con criterios de aceptación, está en [SPEC.md §11](SPEC.
 | `booking-service` (+ `booking-indexer`) | Actividades, clases, reservas, asistencia | PostgreSQL `booking_db` + OpenSearch | Hexagonal + CQRS | 8082 (indexer 8086) |
 | `benefits-service` | Club de Beneficios y API v1 para partners | PostgreSQL `benefits_db` | Hexagonal | 8083 |
 | `training-service` | Planes, mediciones, consultas | MongoDB `training_db` | Capas | 8084 |
-| `notification-worker` | Emails de membresía | MongoDB `notifications_db` | Consumidor | 8085 |
+| `notification-worker` | Emails de confirmación y vencimiento de membresía | MongoDB `notifications_db` | Consumidor | 8085 |
 
 Más detalle en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

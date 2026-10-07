@@ -40,7 +40,7 @@ Dentro del alcance de esta especificación:
 |---|---|
 | Identidad y acceso | Usuarios con rol ADMINISTRADOR, PROFESIONAL (PROFESOR / NUTRICIONISTA) y ALUMNO. Las integraciones externas usan credenciales propias de la API pública. Cada usuario o integración opera solo dentro de sus permisos. |
 | Alumnos y profesionales | Alta, modificación, baja lógica y consulta. Asignación de alumnos a profesionales. |
-| Membresías | Tipos de membresía, asignación, renovación, cancelación, vencimiento automático y email de confirmación asíncrono. |
+| Membresías | Tipos de membresía, asignación, renovación, cancelación, vencimiento automático y emails asíncronos de confirmación, recordatorio y advertencia. |
 | Actividades y clases | Actividades (Musculación, Funcional, GAP, Strong Nation, Zumba), horarios recurrentes, generación de clases/turnos, capacidad, ocupación y cancelación de clases. |
 | Reservas | Reservar, cancelar y consultar reservas con control de cupo, concurrencia e idempotencia. |
 | Asistencia | Registro automático al ingresar el alumno al gimnasio mediante DNI. |
@@ -48,7 +48,7 @@ Dentro del alcance de esta especificación:
 | Nutrición | Planes alimenticios, mediciones corporales (historial inmutable) y consultas de los alumnos a su nutricionista. |
 | Club de Beneficios | Cuenta de puntos, saldo, movimientos, catálogo de beneficios, canjes, acreditación automática por asistencia. |
 | API pública para partners | Acreditar, debitar, canjear, consultar saldo y movimientos de las cuentas vinculadas al partner, con idempotencia. |
-| Notificaciones | Email de confirmación de membresía asignada o renovada (asíncrono). |
+| Notificaciones | Email de confirmación de membresía asignada o renovada, recordatorio 10 días antes del vencimiento y advertencia el día del vencimiento (asíncronos). |
 
 ### 1.3 Fuera de alcance
 
@@ -59,7 +59,7 @@ Dentro del alcance de esta especificación:
 - Vencimiento de puntos por antigüedad.
 - Stock o disponibilidad limitada de beneficios (siempre hay beneficios disponibles; el catálogo lo mantiene el administrador).
 - Usuarios de partners que no sean alumnos del gimnasio.
-- Notificaciones distintas del email de membresía (recordatorios de clase, push, SMS, avisos de cancelación de clase). *Ver dudas.*
+- Notificaciones distintas de las de membresía (recordatorios de clase, push, SMS, avisos de cancelación de clase).
 - Recuperación de contraseña, doble factor y autogestión del registro por parte del alumno (el alta la hace el administrador).
 - Reportes estadísticos y tableros de gestión.
 - Gestión de salas/espacios físicos y equipamiento.
@@ -210,6 +210,8 @@ La integración externa no es un usuario ni un rol del sistema. El administrador
 - **Acreditar 500 puntos** por cada asistencia confirmada (exactamente una vez).
 - **Descontar hasta 100 puntos** por cada reserva confirmada que termina sin ingreso (exactamente una vez).
 - **Enviar el email** de confirmación de membresía de forma asíncrona, con reintentos.
+- **Enviar un recordatorio** 10 días antes del vencimiento de la membresía.
+- **Enviar una advertencia** el día del vencimiento de la membresía.
 
 ---
 
@@ -498,6 +500,17 @@ Reglas: RN-05.
 - **CA-28.2** Dado un fallo de envío, cuando se reintenta, entonces se envía como máximo un email exitoso por membresía (sin duplicados por reintento).
 - **CA-28.3** La operación de asignación/renovación responde sin esperar el envío del email.
 
+#### HU-36 — Avisar el vencimiento de la membresía
+*Como alumno, quiero recibir avisos antes y durante el vencimiento de mi membresía, para poder renovarla a tiempo.*
+
+Reglas: RN-05, RN-41.
+
+- **CA-36.1** Dada una membresía ACTIVA cuyo vencimiento es dentro de 10 días, cuando llega la fecha de recordatorio en `America/Argentina/Buenos_Aires`, entonces se encola un email de tipo `RECORDATORIO_VENCIMIENTO` con la fecha de vencimiento.
+- **CA-36.2** Dada una membresía ACTIVA cuyo vencimiento es hoy, cuando llega el momento programado del día, entonces se encola un email de tipo `ADVERTENCIA_VENCIMIENTO`.
+- **CA-36.3** Si el alumno ya tiene una renovación ACTIVA que cubre el período siguiente, igualmente recibe el aviso de la membresía que vence, pero el email puede informar que existe una renovación vigente.
+- **CA-36.4** Si el proceso se ejecuta más de una vez, no se envía más de un recordatorio ni más de una advertencia por membresía.
+- **CA-36.5** Un fallo de envío no modifica la membresía y se reintenta según la política del notification-worker.
+
 ### 4.5 Operaciones de la API pública de partners
 
 #### HU-29 — Acreditar puntos (partner)
@@ -545,6 +558,7 @@ Reglas: RN-26.
 | **RN-03** | **Vencimiento automático.** Al finalizar el día de `fecha_vencimiento`, una membresía ACTIVA pasa a VENCIDA. Ninguna otra transición es automática. |
 | **RN-04** | **Cancelación.** Solo una membresía ACTIVA puede cancelarse, por el administrador y con motivo. Al cancelarla, se cancelan las reservas activas de clases futuras cuya fecha ya no quede cubierta por otra membresía vigente del alumno. |
 | **RN-05** | **Email asíncrono.** Al asignar o renovar una membresía se emite una notificación de email de confirmación que se procesa de forma asíncrona. Un fallo en el envío **no** revierte ni bloquea la membresía; se reintenta con un número acotado de intentos y se registra el resultado. No se envían emails duplicados por la misma membresía. |
+| **RN-41** | **Avisos de vencimiento.** Para cada membresía ACTIVA se envía como máximo un email `RECORDATORIO_VENCIMIENTO` 10 días calendario antes de `fecha_vencimiento` y como máximo un email `ADVERTENCIA_VENCIMIENTO` durante el día de `fecha_vencimiento`, usando `America/Argentina/Buenos_Aires`. La asignación de una renovación no cancela los avisos de la membresía anterior. Los fallos se reintentan sin modificar la membresía. |
 | **RN-06** | **Inmutabilidad de membresías finalizadas.** Una membresía VENCIDA o CANCELADA no cambia de estado ni de fechas. Renovar siempre crea una membresía nueva. |
 
 ### 5.2 Actividades, horarios y clases
@@ -650,7 +664,7 @@ Reglas: RN-26.
 | **Partner** | id, nombre, contacto, estado (ACTIVO/INACTIVO), credenciales (referencia) |
 | **VinculaciónPartner** | partner, identificador externo de usuario, cuenta de beneficios, fecha |
 | **OperaciónPartner** | partner, identificador de operación, tipo, datos recibidos (huella), resultado devuelto, fecha |
-| **NotificaciónEmail** | id, destinatario, tipo (MEMBRESÍA_ASIGNADA/MEMBRESÍA_RENOVADA), referencia (membresía), estado (PENDIENTE/ENVIADA/FALLIDA), intentos, fecha último intento |
+| **NotificaciónEmail** | id, destinatario, tipo (MEMBRESÍA_ASIGNADA/MEMBRESÍA_RENOVADA/RECORDATORIO_VENCIMIENTO/ADVERTENCIA_VENCIMIENTO), referencia (membresía), estado (PENDIENTE/ENVIADA/FALLIDA), intentos, fecha último intento |
 
 ### 6.2 Relaciones
 
@@ -1216,7 +1230,7 @@ stateDiagram-v2
 | D-08 | Límites de partners | Sin tope de puntos; claves de idempotencia retenidas ≥ 30 días. | RN-27 |
 | D-09 | Alumnos visibles por profesional | Profesor: asignados + con reserva en sus clases (planes solo de asignados). Nutricionista: sus pacientes asignados. | RN-30 |
 | D-10 | Alcance del nutricionista | No dicta clases ni arma planes de entrenamiento. Carga planes alimenticios, registra mediciones y responde consultas de sus pacientes. | S-16, RN-08, RN-28, RN-37, HU-33, HU-34 |
-| D-11 | Notificaciones extra | No se notifica la cancelación de clases ni de membresías. | §1.3 |
+| D-11 | Notificaciones extra | No se notifica la cancelación de clases ni de membresías. Sí se envían los emails propios del ciclo de vida de la membresía: confirmación, recordatorio 10 días antes y advertencia el día del vencimiento. | §1.3, RN-05, RN-41 |
 | D-12 | Membresías retroactivas | No; inicio ≥ hoy. | RN-02, §9 |
 | D-13 | Puntos y beneficios | Los puntos no vencen. Los beneficios no tienen stock: siempre hay, varían y los cambia el admin. | RN-24, HU-09, CU-07 |
 | D-14 | Puntos por actividad | Valor único de 500 puntos por clase asistida, sin diferenciar la actividad. La inasistencia a una reserva confirmada genera una penalización de hasta -100 puntos, sin saldo negativo. | RN-20, RN-38 |
@@ -1226,3 +1240,5 @@ stateDiagram-v2
 | D-17 | Musculación por día | Máximo 1 turno de Musculación por alumno por día. Si lo cancela, puede reservar otro del mismo día. | RN-12, RN-39, HU-14, CL-03c |
 | D-18 | Reservas superpuestas | No se permiten, ni entre actividades distintas ni con los turnos de Musculación. Una clase que termina a las 20:00 no se superpone con una que empieza a las 20:00. | RN-12, RN-40, HU-14, CL-03c |
 | D-19 | Tipos de membresía iniciales | Mensual (1 mes), Trimestral (3 meses) y Anual (12 meses). | Glosario, HU-03 |
+
+| D-32 | Avisos de vencimiento de membresía | METALFITNESS envía al alumno un recordatorio 10 días calendario antes del vencimiento y una advertencia durante el día del vencimiento. Los envíos son asíncronos, idempotentes por membresía y tipo, y no dependen del partner externo. | RN-41, HU-36 |

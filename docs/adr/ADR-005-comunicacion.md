@@ -79,6 +79,7 @@ Reglas generales: todo cliente HTTP usa el `context` de la request (el timeout t
 | Evento | Productor → Consumidor | Por qué asíncrono |
 |---|---|---|
 | `membresia.activada` | members → notification-worker | El email es lento y externo; no debe bloquear ni revertir la membresía (RN-05) |
+| `membresia.recordatorio_vencimiento`, `membresia.advertencia_vencimiento` | members → notification-worker | Los avisos de vencimiento son asíncronos y no deben bloquear el vencimiento ni depender de un partner (RN-41) |
 | `asistencia.registrada` | booking → benefits | Registrar el ingreso no debe depender de benefits; +500 puntos con consistencia eventual (CL-15) |
 | `inasistencia.registrada` | booking → benefits | Aplicar la penalización de hasta -100 puntos al cerrar una clase, sin saldo negativo y con consistencia eventual |
 | `clase.actualizada` | booking → booking-indexer | Mantener el modelo de lectura sin cargar la escritura |

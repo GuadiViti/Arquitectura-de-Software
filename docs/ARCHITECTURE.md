@@ -74,7 +74,7 @@ flowchart TB
     prof -- "Usa (HTTPS, navegador)" --> gym
     alumno -- "Usa (HTTPS, navegador)" --> gym
     partner -- "Acredita, debita, canjea y consulta puntos<br/>(HTTPS, API v1 + API key)" --> gym
-    gym -- "Envía email de confirmación<br/>de membresía (SMTP)" --> smtp
+    gym -- "Envía emails de membresía<br/>(confirmación, recordatorio y advertencia)" --> smtp
     smtp -. "Entrega" .-> alumno
 
     classDef person fill:#08427b,stroke:#052e56,color:#fff
@@ -167,12 +167,12 @@ flowchart LR
 | Servicio | Responsabilidad | Entidades (SPEC §6) | Datos que administra | Almacenamiento | Patrón interno | Operaciones principales | Dependencias síncronas | Publica | Consume |
 |---|---|---|---|---|---|---|---|---|---|
 | **api-gateway** | Punto de entrada único. Autenticación JWT, identidad, rate limiting, routing, correlación, timeouts. | — | Ninguno de negocio. Contadores de rate limiting. | Redis | Pipeline de middlewares | Validar JWT, enrutar, limitar, propagar contexto | Todos los servicios (proxy) | — | — |
-| **members-service** | Identidad y habilitación: usuarios, login, roles, alumnos, profesionales, asignaciones y membresías. | Usuario, Alumno, Profesional, AsignaciónProfesionalAlumno, TipoMembresía, Membresía | Padrón de personas, credenciales (hash), roles, asignaciones, historial de membresías | PostgreSQL `members_db` | **Capas** (Handler → Service → Repository) | Login (emite JWT), ABM de alumnos/profesionales, asignar alumno, asignar/renovar/cancelar membresía, vencimiento diario, consulta interna de vigencia | — | `alumno.creado`, `membresia.activada`; `membresia.cancelada`, `usuario.desactivado` | — |
+| **members-service** | Identidad y habilitación: usuarios, login, roles, alumnos, profesionales, asignaciones y membresías. | Usuario, Alumno, Profesional, AsignaciónProfesionalAlumno, TipoMembresía, Membresía | Padrón de personas, credenciales (hash), roles, asignaciones, historial de membresías | PostgreSQL `members_db` | **Capas** (Handler → Service → Repository) | Login (emite JWT), ABM de alumnos/profesionales, asignar alumno, asignar/renovar/cancelar membresía, vencimiento diario, avisos de vencimiento, consulta interna de vigencia | — | `alumno.creado`, `membresia.activada`, `membresia.recordatorio_vencimiento`, `membresia.advertencia_vencimiento`; `membresia.cancelada`, `usuario.desactivado` | — |
 | **booking-service** | Oferta y uso del gimnasio: actividades, horarios, clases, reservas, ingresos y asistencia automática. | Actividad, Horario, Clase, Reserva, Asistencia | Catálogo de actividades, agenda, cupos, reservas, ingresos y asistencias | PostgreSQL `booking_db` (escritura, fuente de verdad) + OpenSearch (lectura) | **Hexagonal** + **CQRS de lectura** | Generar clases, consultar clases con ocupación, reservar, cancelar, registrar ingreso mediante DNI, marcar ausencias al finalizar, cancelar clase | `members-service` (membresía vigente; datos de alumnos para ingresos y listados) | `asistencia.registrada`, `clase.actualizada` | `membresia.cancelada`, `usuario.desactivado` |
 | **booking-indexer** | Mantener el modelo de lectura de clases en OpenSearch. | Proyección `ClaseLectura` | Índice `clases` (derivado, reconstruible) | OpenSearch | Consumidor (parte del módulo booking) | Indexar/actualizar clase, reindexado completo | — (lee `booking_db` solo para reindexado completo, mismo servicio) | — | `clase.actualizada` |
 | **benefits-service** | Club de Beneficios y **capacidad publicada a otros grupos** (API v1 de puntos). | CuentaBeneficios, MovimientoPuntos, Beneficio, Canje, Partner, VinculaciónPartner, OperaciónPartner | Cuentas, ledger inmutable, catálogo, canjes, partners y API keys (hash), claves de idempotencia | PostgreSQL `benefits_db` | **Hexagonal** | Consultar saldo/movimientos, canjear, acreditar por asistencia, penalizar inasistencia, revertir, ABM de beneficios y partners, API partner (acreditar, debitar, canjear, consultar) | `members-service` solo para validar el alumno al vincularlo a un partner (operación de baja frecuencia) | — (ninguno en v1) | `alumno.creado`, `asistencia.registrada`, `inasistencia.registrada` |
 | **training-service** | Seguimiento del alumno: entrenamiento y nutrición. | PlanEntrenamiento, DíaRutina, EjercicioPlanificado, PlanAlimenticio, Medición, ConsultaNutricional | Planes (documentos anidados), mediciones (append-only), consultas | MongoDB `training_db` | **Capas** | ABM de planes de entrenamiento, planes alimenticios, registrar mediciones, consultas nutricionales | `members-service` (¿el alumno está asignado a este profesional?) | — | — |
-| **notification-worker** | Enviar emails de confirmación de membresía. | NotificaciónEmail | Registro de mensajes procesados y estado de envío | MongoDB `notifications_db` | Consumidor | Consumir evento, enviar email, registrar resultado | SMTP (Mailpit en local) | — | `membresia.activada` |
+| **notification-worker** | Enviar emails de membresía. | NotificaciónEmail | Registro de mensajes procesados y estado de envío | MongoDB `notifications_db` | Consumidor | Consumir eventos de confirmación, recordatorio y advertencia; enviar email; registrar resultado | SMTP (Mailpit en local) | — | `membresia.activada`, `membresia.recordatorio_vencimiento`, `membresia.advertencia_vencimiento` |
 
 ### 4.2 Detalle por servicio
 
@@ -181,7 +181,7 @@ flowchart LR
 - **Por qué capas:** lógica mayormente CRUD con reglas acotadas (solapamiento de membresías, unicidad de DNI/email). Una arquitectura hexagonal agregaría indirección sin beneficio.
 - **Reglas SPEC que implementa:** RN-01 a RN-06, RN-30 (parcial), RN-33, RN-34.
 - **API interna** (no expuesta por el gateway): `GET /internal/v1/alumnos/{id}/vigencia?fechas=2026-10-07,2026-10-09` → `{vigente_hoy, vigente_en: {fecha: bool}}`; `GET /internal/v1/alumnos?ids=…` (datos mínimos para listados); `GET /internal/v1/asignaciones?profesional_id=…&alumno_id=…`.
-- **Procesos programados:** vencimiento diario de membresías (00:00 America/Argentina/Buenos_Aires) y relay del outbox.
+- **Procesos programados:** generación diaria de avisos de vencimiento y vencimiento de membresías (America/Argentina/Buenos_Aires), además del relay del outbox.
 - **JWT:** firma RS256 con clave privada propia; el gateway solo tiene la clave pública. Vida corta (15 min).
 
 #### booking-service — Hexagonal + CQRS de lectura
@@ -210,7 +210,7 @@ flowchart LR
 
 #### notification-worker
 
-- Consume `membresia.activada`, arma el email (tipo, inicio, vencimiento) con los datos que trae el evento (no consulta a members) y lo envía por SMTP.
+- Consume eventos de membresía, arma el email correspondiente con los datos que trae el evento (no consulta a members) y lo envía por SMTP. Los eventos de recordatorio y advertencia incluyen una clave única por membresía y tipo para evitar duplicados.
 - Registra en `notifications_db.mensajes` cada `event_id` con estado `PROCESANDO → ENVIADO | FALLIDO`; índice único por `event_id`.
 - Expone `:8085` solo para `/health` y `/metrics`.
 
@@ -281,6 +281,8 @@ El rate limiting **falla abierto** (deja pasar y registra métrica `ratelimit_re
 |---|---|---|---|---|
 | `alumno.creado` | members-service | benefits-service | Crear la cuenta de beneficios del alumno con saldo 0 | S-10, HU-01 |
 | `membresia.activada` | members-service | notification-worker | Enviar email de confirmación (asignación o renovación) | RN-05 |
+| `membresia.recordatorio_vencimiento` | members-service | notification-worker | Enviar recordatorio 10 días antes del vencimiento | RN-41 |
+| `membresia.advertencia_vencimiento` | members-service | notification-worker | Enviar advertencia el día del vencimiento | RN-41 |
 | `asistencia.registrada` | booking-service | benefits-service | Acreditar +500 puntos por ingreso válido exactamente una vez | RN-20, RN-21 |
 | `inasistencia.registrada` | booking-service | benefits-service | Aplicar hasta -100 puntos por reserva confirmada no asistida, sin saldo negativo y exactamente una vez | RN-38 |
 | `clase.actualizada` | booking-service | booking-indexer | Upsert del documento de la clase en OpenSearch (ignora versiones viejas) | CQRS |
@@ -313,6 +315,8 @@ Todos los eventos viajan con la misma envoltura JSON. La routing key es el nombr
 | Evento | Versión | Productor | Consumidores | Campos de `data` |
 |---|---|---|---|---|
 | `membresia.activada` | 1 | members-service | notification-worker | `membresia_id`, `alumno_id`, `alumno_nombre`, `alumno_email`, `tipo_membresia`, `fecha_inicio` (fecha), `fecha_vencimiento` (fecha), `operacion` (`ASIGNACION` \| `RENOVACION`), `membresia_anterior_id` (nullable) |
+| `membresia.recordatorio_vencimiento` | 1 | members-service | notification-worker | `membresia_id`, `alumno_id`, `alumno_nombre`, `alumno_email`, `tipo_membresia`, `fecha_vencimiento`, `dias_restantes` (10), `clave_notificacion` |
+| `membresia.advertencia_vencimiento` | 1 | members-service | notification-worker | `membresia_id`, `alumno_id`, `alumno_nombre`, `alumno_email`, `tipo_membresia`, `fecha_vencimiento`, `dias_restantes` (0), `clave_notificacion` |
 | `alumno.creado` | 1 | members-service | benefits-service | `alumno_id` |
 | `asistencia.registrada` | 1 | booking-service | benefits-service | `asistencia_id`, `reserva_id`, `clase_id`, `alumno_id`, `actividad_id`, `actividad_nombre`, `clase_inicio` (RFC 3339), `resultado` (`ASISTIO`), `puntos` (500), `origen` (`INGRESO_DNI`), `registrada_en` |
 | `inasistencia.registrada` | 1 | booking-service | benefits-service | `reserva_id`, `clase_id`, `alumno_id`, `actividad_id`, `clase_inicio` (RFC 3339), `puntos_penalizacion` (100), `registrada_en` |
