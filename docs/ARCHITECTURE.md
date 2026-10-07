@@ -198,7 +198,7 @@ flowchart LR
 - **Por qué hexagonal:** es la capacidad publicada a otros grupos; su contrato (API v1) debe mantenerse estable aunque cambie la infraestructura, y el ledger tiene invariantes estrictas (RN-22 a RN-27).
 - **Ledger:** `movimientos_puntos` es append-only; el saldo se mantiene en `cuentas.saldo` actualizado en la misma transacción que inserta el movimiento, con `CHECK (saldo >= 0)`. La reversión inserta un movimiento compensatorio.
 - **Cuentas:** se crean **bajo demanda** (primera acreditación, primera consulta o vinculación) a partir del `alumno_id`. Esto cumple S-10 (todo alumno tiene cuenta) sin necesitar un evento `alumno.creado`. Una cuenta inexistente se informa con saldo 0.
-- **API v1 de partners:** `/partner-api/v1/...` con API key (`X-API-Key`, guardada como hash) e `Idempotency-Key` obligatorio en escrituras. Contrato publicado en `docs/api/benefits-partner-v1.yaml` (etapa siguiente).
+- **API v1 de partners:** `/partner-api/v1/...` con API key (`X-API-Key`, guardada como hash) e `Idempotency-Key` obligatorio en escrituras. Contrato publicado: [docs/contracts/benefits-api.v1.yaml](contracts/benefits-api.v1.yaml) (OpenAPI 3.1, v1.0.0), guía para consumidores en [docs/contracts/README.md](contracts/README.md) y decisión en [ADR-008](adr/ADR-008-contrato-propio.md). Las rutas públicas son `/partner-api/v1/accounts/{externalUserId}/...` y usan inglés y `camelCase` (excepción a §12.2).
 - **Idempotencia de asistencia:** restricción única sobre `movimientos_puntos.origen_asistencia_id` además del registro de mensajes procesados.
 
 #### training-service — Capas
@@ -523,7 +523,8 @@ La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en 
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── adr/
-│   ├── api/                        # OpenAPI por servicio + API v1 de partners
+│   ├── api/                        # OpenAPI interno por servicio
+│   ├── contracts/                  # Contratos públicos: benefits-api.v1.yaml + guía + reglas Spectral
 │   └── events/                     # JSON Schema de cada evento
 └── tests/
     ├── load/                       # scripts k6
@@ -605,3 +606,5 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | [ADR-003](adr/ADR-003-persistencia.md) | D3 — Persistencia por servicio (versión inicial) | Aceptado |
 | ADR-004 | D4 — *reservado* | — |
 | [ADR-005](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona (versión inicial) | Aceptado |
+| ADR-006, ADR-007 | D6, D7 — *reservados* | — |
+| [ADR-008](adr/ADR-008-contrato-propio.md) | D8 — Contrato propio: API de fidelización v1 | Aceptado |

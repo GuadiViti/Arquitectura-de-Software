@@ -8,7 +8,7 @@ Sistema integral de gestión de gimnasio: Trabajo Práctico Integrador de Arquit
 
 - **Qué hace el sistema:** [SPEC.md](SPEC.md) (aprobado; fuente de verdad del negocio).
 - **Cómo está construido:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) y [docs/adr/](docs/adr/).
-- **Etapa actual:** 02 — arquitectura documentada, **sin código de aplicación todavía**.
+- **Etapa actual:** 03 — contrato público de la API de partners publicado ([docs/contracts/](docs/contracts/README.md)) con mock; **sin código de aplicación todavía**.
 
 ## Stack
 
@@ -96,7 +96,7 @@ internal/adapters/out/{postgres,opensearch,members,outbox}/
 
 - Dominio en **español** según el glosario del SPEC, sin tildes en identificadores (`Reserva`, `Membresia`, `CuentaBeneficios`). Términos técnicos en inglés (`Repository`, `Handler`).
 - Endpoints: `/api/v1/<recurso-plural-kebab>`; API de partners: `/partner-api/v1/...`; internos: `/internal/v1/...` (el gateway no los expone).
-- JSON y columnas: `snake_case`. Eventos: `<entidad>.<participio>`. Variables de entorno: `UPPER_SNAKE` con prefijo del servicio.
+- JSON y columnas: `snake_case`. **Excepción:** el contrato público para partners ([docs/contracts/](docs/contracts/README.md)) usa inglés y `camelCase` (ADR-008). Eventos: `<entidad>.<participio>`. Variables de entorno: `UPPER_SNAKE` con prefijo del servicio.
 - Fechas en APIs y eventos: RFC 3339 UTC. Reglas de negocio ("hoy", "vence hoy", "10 minutos antes"): zona `America/Argentina/Buenos_Aires`, siempre con un `Clock` inyectable.
 
 ### Commits y ramas
@@ -130,7 +130,7 @@ Conventional Commits y GitHub Flow; ver [CONTRIBUTING.md](CONTRIBUTING.md). Rama
 9. **Escrituras sensibles aceptan `Idempotency-Key`** (reservar, cancelar, canjear, asistencia; obligatoria en la API de partners).
 10. **Identidad solo desde el gateway.** Los servicios leen `X-User-Id` / `X-User-Role`; nunca decodifican el JWT ni confían en datos de identidad del body.
 11. **Tests obligatorios** para toda regla de negocio, con los casos límite del SPEC §10 cuando apliquen. Integración con testcontainers, no mocks de la base.
-12. **Contratos versionados.** Cambios en APIs públicas, API de partners o eventos se documentan en `docs/api/` o `docs/events/` y siguen las reglas de versionado de ARCHITECTURE §7.1.
+12. **Contratos versionados.** Cambios en APIs públicas, API de partners o eventos se documentan en `docs/contracts/` (API de partners: correr `make contract-lint` y actualizar el CHANGELOG de la guía), `docs/api/` o `docs/events/` y siguen las reglas de versionado de ARCHITECTURE §7.1.
 13. **Sin secretos en el repo.** Solo `.env.example`. Nunca commitees `.env`, claves ni API keys.
 14. **No loguees datos personales** (ver Logs).
 15. **No hagas commits ni push sin que te lo pidan**, y nunca sobre `main`.

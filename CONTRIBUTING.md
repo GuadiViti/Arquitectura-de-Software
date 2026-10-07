@@ -87,7 +87,7 @@ Un cambio que rompe un contrato (API pública, API de partners o esquema de even
 - [ ] No accede a la base de otro servicio
 - [ ] Errores en formato RFC 7807
 - [ ] Si publica eventos: usa outbox; si consume: es idempotente
-- [ ] Si cambia un contrato (API o evento): documentado en docs/api o docs/events
+- [ ] Si cambia un contrato (API o evento): documentado en docs/contracts, docs/api o docs/events
 - [ ] Si es una decisión estructural: ADR nuevo o actualizado
 ```
 

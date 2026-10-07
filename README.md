@@ -2,7 +2,7 @@
 
 Trabajo Práctico Integrador de **Arquitectura de Software**: un sistema de microservicios para gestionar un gimnasio — alumnos, membresías, clases y reservas, asistencia, entrenamiento, nutrición y un **Club de Beneficios** con puntos que también usan sistemas de otros grupos.
 
-> Estado: **etapa 02 — arquitectura definida**. Todavía no hay código de aplicación.
+> Estado: **etapa 03 — contrato de la API de partners publicado, con mock**. Todavía no hay código de aplicación.
 
 ## Dominio
 
@@ -87,6 +87,23 @@ make down        # baja el stack
 | http://localhost:16686 | Jaeger (trazas) |
 | http://localhost:3000 | Grafana (métricas y logs) |
 
+## Mock de la API de partners (disponible ya)
+
+El contrato público del Club de Beneficios ([docs/contracts/benefits-api.v1.yaml](docs/contracts/benefits-api.v1.yaml)) se puede probar hoy con un mock (Prism) que responde con los ejemplos del contrato. Solo requiere Docker.
+
+```bash
+docker compose -f deploy/docker-compose.mock.yml up -d     # o: make mock-up   → http://localhost:4010
+docker compose -f deploy/docker-compose.mock.yml down      # o: make mock-down
+```
+
+Prueba rápida:
+
+```bash
+curl -s http://localhost:4010/v1/accounts/cli-10045/balance -H "X-API-Key: demo-partner-key"
+```
+
+Validar el contrato con Spectral: `make contract-lint` (o el comando `docker run` equivalente). Ejemplos completos, errores y reintentos en la [guía de integración](docs/contracts/README.md).
+
 ## Documentación
 
 | Documento | Contenido |
@@ -94,6 +111,8 @@ make down        # baja el stack
 | [SPEC.md](SPEC.md) | Especificación funcional aprobada: HU, reglas de negocio, estados, casos límite |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Arquitectura: C4, servicios, comunicaciones, eventos, despliegue, limitaciones |
 | [docs/adr/](docs/adr/) | Registros de decisiones de arquitectura (ADR) |
+| [docs/contracts/](docs/contracts/README.md) | **Contrato público** del Club de Beneficios para otros grupos: [benefits-api.v1.yaml](docs/contracts/benefits-api.v1.yaml) (OpenAPI 3.1), guía de integración y mock |
+| [Registro_de_Decisiones_Gimnasio.docx](Registro_de_Decisiones_Gimnasio.docx) | Registro de decisiones del grupo (D-01 en adelante) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Ramas, commits, PR y revisión |
 | [CLAUDE.md](CLAUDE.md) | Contexto y reglas para asistentes de IA en este repo |
 
