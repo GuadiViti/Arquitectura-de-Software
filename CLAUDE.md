@@ -102,7 +102,7 @@ internal/adapters/…              amqp, opensearch, members, outbox cuando haga
 ### Nombres
 
 - Dominio en **español** según el glosario del SPEC, sin tildes en identificadores (`Reserva`, `Membresia`, `CuentaBeneficios`). Términos técnicos en inglés (`Repository`, `Handler`).
-- Endpoints públicos: prefijos en **inglés** (`/api/v1/auth`, `users`, `memberships`, `activities`, `classes`, `bookings`, `attendance`, `benefits`, `training`, `nutrition`; tabla en ARCHITECTURE §5.2). Un prefijo nuevo se agrega en `gateway/internal/config` y en esa tabla. API de partners: `/partner-api/v1/...`; internos: `/internal/v1/...` (el gateway responde 404 a cualquier ruta con un segmento `internal`).
+- Endpoints públicos: prefijos en **inglés** (`/api/v1/auth`, `users`, `memberships`, `activities`, `classes`, `bookings`, `check-ins`, `benefits`, `training`, `nutrition`; tabla en ARCHITECTURE §5.2). Un prefijo nuevo se agrega en `gateway/internal/config` y en esa tabla. API de partners: `/partner-api/v1/...`; internos: `/internal/v1/...` (el gateway responde 404 a cualquier ruta con un segmento `internal`).
 - Header de correlación: `X-Correlation-ID`. Lo maneja `pkg/correlation`; para llamadas salientes usá `correlation.Transport`.
 - Salud: `/health/live` y `/health/ready` con `pkg/health`. Cada dependencia propia nueva (Redis, RabbitMQ, OpenSearch…) se agrega como `health.Check` del servicio que la usa.
 - JSON y columnas: `snake_case`. **Excepción:** el contrato público para partners ([docs/contracts/](docs/contracts/README.md)) usa inglés y `camelCase` (ADR-008). Eventos: `<entidad>.<participio>`. Variables de entorno: `UPPER_SNAKE` con prefijo del servicio.
