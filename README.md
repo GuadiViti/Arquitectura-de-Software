@@ -12,9 +12,10 @@ Trabajo Práctico Integrador de **Arquitectura de Software**: un sistema de micr
 | **Profesor** | Consulta sus clases y alumnos, registra asistencia y arma planes de entrenamiento. |
 | **Nutricionista** | Carga planes alimenticios, registra mediciones y responde consultas de sus pacientes. |
 | **Alumno** | Reserva clases, consulta su membresía, planes, mediciones y puntos; canjea beneficios. |
-| **Partner externo** | Sistema de otro grupo que acredita, debita, canjea y consulta puntos por API. |
 
 Actividades: **Musculación** (7 turnos diarios de 2 horas entre 08:00 y 22:00, dentro del horario de apertura 08:00–23:00, hasta 50 alumnos) y **Funcional, GAP, Strong Nation y Zumba** (horarios configurables, hasta 30 alumnos). La asistencia confirmada suma puntos: 5 en Musculación, 10 en el resto.
+
+El Club de Beneficios expone una API pública para integraciones externas. Los sistemas de otros grupos no son usuarios ni roles del gimnasio: se autentican con API key y solo operan sobre cuentas de alumnos previamente vinculadas por un administrador.
 
 ## Objetivo
 

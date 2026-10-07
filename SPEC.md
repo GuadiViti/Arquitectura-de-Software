@@ -38,7 +38,7 @@ Dentro del alcance de esta especificación:
 
 | Área | Incluye |
 |---|---|
-| Identidad y acceso | Usuarios con rol ADMINISTRADOR, PROFESIONAL (PROFESOR / NUTRICIONISTA) y ALUMNO; credenciales de PARTNER EXTERNO. Cada actor ve y opera solo lo que le corresponde. |
+| Identidad y acceso | Usuarios con rol ADMINISTRADOR, PROFESIONAL (PROFESOR / NUTRICIONISTA) y ALUMNO. Las integraciones externas usan credenciales propias de la API pública. Cada usuario o integración opera solo dentro de sus permisos. |
 | Alumnos y profesionales | Alta, modificación, baja lógica y consulta. Asignación de alumnos a profesionales. |
 | Membresías | Tipos de membresía, asignación, renovación, cancelación, vencimiento automático y email de confirmación asíncrono. |
 | Actividades y clases | Actividades (Musculación, Funcional, GAP, Strong Nation, Zumba), horarios recurrentes, generación de clases/turnos, capacidad, ocupación y cancelación de clases. |
@@ -189,14 +189,18 @@ Dentro del alcance de esta especificación:
 - **Enviar consultas** a su nutricionista y ver las respuestas.
 - Consultar su **saldo**, **historial de movimientos**, **catálogo de beneficios**, **canjear** un beneficio y ver sus **canjes**.
 
-### 3.5 Partner externo
+### 3.5 Integración externa del Club de Beneficios
 
-- **Acreditar** puntos a una cuenta vinculada.
-- **Debitar** puntos de una cuenta vinculada.
-- **Canjear** un beneficio del catálogo en nombre de una cuenta vinculada.
-- **Consultar saldo** y **movimientos** de una cuenta vinculada.
-- Consultar el **catálogo de beneficios** habilitado para canje vía partner.
-- Todas las operaciones de escritura son **idempotentes** por identificador de operación.
+La API pública del Club de Beneficios permite que sistemas externos:
+
+- **Acrediten** puntos a una cuenta vinculada.
+- **Debiten** puntos de una cuenta vinculada.
+- **Canjeen** un beneficio del catálogo en nombre de una cuenta vinculada.
+- **Consulten saldo** y **movimientos** de una cuenta vinculada.
+- Consulten el **catálogo de beneficios** habilitado para canje externo.
+- Ejecuten operaciones de escritura con **idempotencia** por identificador de operación.
+
+La integración externa no es un usuario ni un rol del sistema. El administrador crea y administra sus credenciales; `benefits-service` autentica cada solicitud mediante `X-API-Key` y limita el acceso a las cuentas vinculadas.
 
 ### 3.6 Procesos automáticos del sistema
 
@@ -496,10 +500,10 @@ Reglas: RN-05.
 - **CA-28.2** Dado un fallo de envío, cuando se reintenta, entonces se envía como máximo un email exitoso por membresía (sin duplicados por reintento).
 - **CA-28.3** La operación de asignación/renovación responde sin esperar el envío del email.
 
-### 4.5 Partner externo
+### 4.5 Operaciones de la API pública de partners
 
 #### HU-29 — Acreditar puntos (partner)
-*Como partner, quiero acreditar puntos a un usuario vinculado, para premiarlo por consumos en mi negocio.*
+*Como API pública, quiero permitir que una integración externa acredite puntos a un usuario vinculado, para premiarlo por consumos en su negocio.*
 Reglas: RN-22, RN-26, RN-27.
 
 - **CA-29.1** Dado un partner autenticado, una cuenta vinculada y un identificador de operación nuevo, cuando acredita 100 puntos con motivo, entonces se crea un movimiento CONFIRMADO de +100 con origen el partner, y se devuelve el nuevo saldo y el id del movimiento.
@@ -509,7 +513,7 @@ Reglas: RN-22, RN-26, RN-27.
 - **CA-29.5** Dada una cantidad ≤ 0 o no entera, cuando acredita, entonces se rechaza.
 
 #### HU-30 — Debitar puntos (partner)
-*Como partner, quiero debitar puntos de un usuario vinculado, para que los use en mi negocio.*
+*Como API pública, quiero permitir que una integración externa debite puntos de un usuario vinculado, para que los use en su negocio.*
 Reglas: RN-22, RN-23, RN-26, RN-27.
 
 - **CA-30.1** Dado un saldo de 200, cuando el partner debita 150, entonces se crea un movimiento −150 y el saldo queda en 50.
@@ -517,14 +521,14 @@ Reglas: RN-22, RN-23, RN-26, RN-27.
 - **CA-30.3** Dada una operación de débito rechazada por saldo insuficiente, cuando se reintenta con el mismo identificador, entonces se devuelve el mismo rechazo (aunque entretanto el saldo haya aumentado). Para reintentar con éxito, el partner debe usar un nuevo identificador.
 
 #### HU-31 — Canjear beneficio (partner)
-*Como partner, quiero canjear un beneficio del catálogo para un usuario vinculado.*
+*Como API pública, quiero permitir que una integración externa canjee un beneficio del catálogo para un usuario vinculado.*
 Reglas: RN-24, RN-26, RN-27.
 
 - **CA-31.1** Dado un beneficio habilitado para partners, saldo suficiente y un identificador nuevo, cuando el partner canjea, entonces se crea un canje CONFIRMADO y el débito correspondiente.
 - **CA-31.2** Dado saldo insuficiente, cuando canjea, entonces se rechaza sin cambios.
 
 #### HU-32 — Consultar saldo y movimientos (partner)
-*Como partner, quiero consultar saldo y movimientos de mis usuarios, para mostrarlos en mi sistema.*
+*Como API pública, quiero permitir que una integración externa consulte saldo y movimientos de sus usuarios vinculados, para mostrarlos en su sistema.*
 Reglas: RN-26.
 
 - **CA-32.1** Dada una cuenta vinculada, cuando el partner consulta, entonces obtiene el saldo y los movimientos paginados (fecha, motivo, puntos, estado).
@@ -962,7 +966,7 @@ stateDiagram-v2
 
 | Campo | Detalle |
 |---|---|
-| Actor | Partner externo |
+| Origen | Solicitud externa autenticada mediante API key |
 | Precondiciones | Partner ACTIVO con credenciales válidas. |
 | Reglas | RN-22, RN-26, RN-27 |
 
@@ -987,14 +991,14 @@ stateDiagram-v2
 
 | Campo | Detalle |
 |---|---|
-| Actor | Alumno (o Partner en nombre de un usuario vinculado) |
+| Origen | Alumno o solicitud externa autenticada para una cuenta vinculada |
 | Precondiciones | Cuenta de beneficios existente. |
 | Reglas | RN-15, RN-23, RN-24, RN-27 |
 
 **Flujo principal**
-1. El actor elige un beneficio y confirma el canje (con clave de idempotencia / identificador de operación).
+1. El alumno o la integración externa elige un beneficio y confirma el canje (con clave de idempotencia / identificador de operación).
 2. El sistema verifica si la clave ya fue procesada; si sí, devuelve el resultado original.
-3. El sistema verifica que el beneficio esté ACTIVO, vigente y, si el actor es partner, habilitado para partners. Toma el costo vigente del beneficio.
+3. El sistema verifica que el beneficio esté ACTIVO y vigente y, si la solicitud es externa, habilitado para integraciones. Toma el costo vigente del beneficio.
 4. En una operación atómica: verifica saldo ≥ costo, crea el Canje CONFIRMADO (con los puntos debitados) y el movimiento de débito CONFIRMADO.
 5. El sistema devuelve el canje, el movimiento y el saldo resultante.
 
