@@ -70,7 +70,7 @@ var routeDefs = []struct {
 	{"/api/v1/activities", Booking, "ACTIVITIES", 0},
 	{"/api/v1/classes", Booking, "CLASSES", 0},
 	{"/api/v1/bookings", Booking, "BOOKINGS", 5 * time.Second},
-	{"/api/v1/attendance", Booking, "ATTENDANCE", 5 * time.Second},
+	{"/api/v1/check-ins", Booking, "CHECK_INS", 5 * time.Second},
 	{"/api/v1/benefits", Benefits, "BENEFITS", 5 * time.Second},
 	{"/api/v1/training", Training, "TRAINING", 0},
 	{"/api/v1/nutrition", Training, "NUTRITION", 0},
