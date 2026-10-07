@@ -13,7 +13,7 @@
 ADR-001 definió cinco servicios con complejidades muy distintas:
 
 - **members-service** y **training-service** son mayormente altas, bajas y consultas con validaciones acotadas.
-- **booking-service** concentra las reglas más delicadas del SPEC (cupo con concurrencia, unicidad, superposición, ventana de asistencia, SIN_REGISTRO; RN-12 a RN-21, RN-38 a RN-40) y además tiene un modelo de lectura (CQRS) y dos procesos (api e indexer).
+- **booking-service** concentra las reglas más delicadas del SPEC (cupo con concurrencia, unicidad, superposición, ingreso mediante DNI y ausencias automáticas; RN-12 a RN-21, RN-38 a RN-40) y además tiene un modelo de lectura (CQRS) y dos procesos (api e indexer).
 - **benefits-service** tiene un ledger con invariantes estrictas (RN-22 a RN-27) y publica un contrato a terceros (ADR-008) que debe mantenerse estable aunque cambie la infraestructura.
 
 Usar el mismo patrón para todos haría que los servicios simples carguen indirecciones inútiles, o que los complejos mezclen reglas con infraestructura. Además, el TP pide mostrar y justificar más de un estilo de arquitectura interna.
