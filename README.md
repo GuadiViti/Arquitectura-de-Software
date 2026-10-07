@@ -9,11 +9,11 @@ Trabajo Práctico Integrador de **Arquitectura de Software**: METALFITNESS es un
 | Actor | Qué hace |
 |---|---|
 | **Administrador** | Gestiona alumnos, profesionales, membresías, actividades, clases, horarios y beneficios. |
-| **Profesor** | Consulta sus clases y alumnos, registra asistencia y arma planes de entrenamiento. |
+| **Profesor** | Consulta sus clases y alumnos y arma planes de entrenamiento. La asistencia se registra automáticamente al ingresar con DNI. |
 | **Nutricionista** | Carga planes alimenticios, registra mediciones y responde consultas de sus pacientes. |
 | **Alumno** | Reserva clases, consulta su membresía, planes, mediciones y puntos; canjea beneficios. |
 
-Actividades: **Musculación** (7 turnos diarios de 2 horas entre 08:00 y 22:00, dentro del horario de apertura 08:00–23:00, hasta 50 alumnos) y **Funcional, GAP, Strong Nation y Zumba** (horarios configurables, hasta 30 alumnos). La asistencia confirmada suma puntos: 5 en Musculación, 10 en el resto.
+Actividades: **Musculación** (7 turnos diarios de 2 horas entre 08:00 y 22:00, dentro del horario de apertura 08:00–23:00, hasta 50 alumnos) y **Funcional, GAP, Strong Nation y Zumba** (horarios configurables, hasta 30 alumnos). Cada clase asistida suma **500 puntos**; una reserva confirmada no asistida descuenta hasta **100 puntos**, sin saldo negativo. Las reservas se pueden cancelar hasta **1 hora antes** del inicio.
 
 El Club de Beneficios expone una API pública para integraciones externas. Los sistemas de otros grupos no son usuarios ni roles del gimnasio: se autentican con API key y solo operan sobre cuentas de alumnos previamente vinculadas por un administrador.
 
@@ -42,10 +42,10 @@ sequenceDiagram
     GW->>B: POST /api/v1/bookings
     B->>M: ¿Membresía vigente?
     B-->>Alumno: Reserva confirmada (22/30 ocupados)
-    Profesor->>GW: Registrar ASISTIÓ
-    GW->>B: POST /api/v1/attendance
+    Alumno->>GW: Ingresa DNI en el gimnasio
+    GW->>B: POST /api/v1/check-ins
     B-->>BE: asistencia.registrada (evento)
-    BE->>BE: +10 puntos (una sola vez)
+    BE->>BE: +500 puntos (una sola vez)
     Alumno->>GW: Canjear beneficio
     GW->>BE: POST /api/v1/benefits/redemptions
 ```
