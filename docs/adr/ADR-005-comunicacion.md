@@ -28,7 +28,7 @@ booking llama a benefits para acreditar; members llama al worker para enviar ema
 
 | Pros | Contras |
 |---|---|
-| Simple de seguir y depurar | Acopla disponibilidad: si benefits cae, no se puede registrar asistencia |
+| Simple de seguir y depurar | Acopla disponibilidad: si benefits cae, no se puede registrar el ingreso |
 | Respuesta inmediata | Reintentos y duplicados quedan a cargo del llamador |
 | | El email bloquea el alta de membresía |
 
@@ -79,7 +79,8 @@ Reglas generales: todo cliente HTTP usa el `context` de la request (el timeout t
 | Evento | Productor → Consumidor | Por qué asíncrono |
 |---|---|---|
 | `membresia.activada` | members → notification-worker | El email es lento y externo; no debe bloquear ni revertir la membresía (RN-05) |
-| `asistencia.registrada` | booking → benefits | Registrar asistencia no debe depender de benefits; puntos con consistencia eventual (CL-15) |
+| `asistencia.registrada` | booking → benefits | Registrar el ingreso no debe depender de benefits; +500 puntos con consistencia eventual (CL-15) |
+| `inasistencia.registrada` | booking → benefits | Aplicar la penalización de hasta -100 puntos al cerrar una clase, sin saldo negativo y con consistencia eventual |
 | `clase.actualizada` | booking → booking-indexer | Mantener el modelo de lectura sin cargar la escritura |
 | `membresia.cancelada`, `usuario.desactivado` | members → booking | Cancelar reservas futuras (RN-04, RN-34) sin acoplar members a booking |
 
@@ -100,7 +101,7 @@ Topología, envelope y catálogo: [ARCHITECTURE §7–8](../ARCHITECTURE.md#7-ca
 
 ### Idempotencia HTTP
 
-- `Idempotency-Key` en escrituras sensibles del frontend (reservar, cancelar, canjear, registrar asistencia) — retención 24 h.
+- `Idempotency-Key` en escrituras sensibles del frontend (reservar, cancelar, canjear, registrar ingreso) — retención 24 h.
 - `Idempotency-Key` **obligatoria** en la API de partners — retención ≥ 30 días, por partner (RN-27).
 - Misma clave + mismo request → misma respuesta; misma clave + request distinto → `409 CONFLICTO_IDEMPOTENCIA`.
 
@@ -131,7 +132,7 @@ Topología, envelope y catálogo: [ARCHITECTURE §7–8](../ARCHITECTURE.md#7-ca
 ## Cómo se verificará
 
 - **Outbox:** test de integración que fuerza un fallo del broker después del commit → al recuperarse, el evento se publica.
-- **Idempotencia de consumidores:** reentregar el mismo `asistencia.registrada` 3 veces → un solo movimiento (+10).
+- **Idempotencia de consumidores:** reentregar el mismo `asistencia.registrada` 3 veces → un solo movimiento (+500); reentregar `inasistencia.registrada` no duplica la penalización.
 - **Reintentos y DLQ:** consumidor que falla siempre → el mensaje pasa por las 3 colas de reintento y termina en la DLQ.
 - **Circuit breaker:** con members detenido, `POST /reservas` responde `503` en < 1 s y no crea reservas.
 - **Partners:** el mismo `Idempotency-Key` enviado 10 veces en paralelo → un solo movimiento, 10 respuestas iguales.
