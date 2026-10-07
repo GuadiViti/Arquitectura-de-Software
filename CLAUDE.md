@@ -8,7 +8,7 @@ Sistema integral de gestión de gimnasio: Trabajo Práctico Integrador de Arquit
 
 - **Qué hace el sistema:** [SPEC.md](SPEC.md) (aprobado; fuente de verdad del negocio).
 - **Cómo está construido:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) y [docs/adr/](docs/adr/).
-- **Etapa actual:** 03 — contrato público de la API de partners publicado ([docs/contracts/](docs/contracts/README.md)) con mock; **sin código de aplicación todavía**.
+- **Etapa actual:** esqueleto del proyecto — monorepo Go con `go.work`, `pkg/` compartido, los 5 servicios + indexer + gateway con `/health/live` y `/health/ready`, frontend con la pantalla "Estado del sistema", Docker Compose y CI. **Todavía no hay funcionalidades de negocio** (usuarios, membresías, clases, reservas, entrenamiento, nutrición ni beneficios).
 
 ## Stack
 
@@ -31,8 +31,8 @@ Sistema integral de gestión de gimnasio: Trabajo Práctico Integrador de Arquit
 |---|---|---|---|---|---|
 | `api-gateway` | 8080 | Middlewares | Redis (rate limit) | — | — |
 | `members-service` | 8081 | **Capas** | PostgreSQL `members_db` | `membresia.activada`, `membresia.cancelada`, `usuario.desactivado` | — |
-| `booking-service` (×2, Traefik) | 8082 | **Hexagonal + CQRS** | PostgreSQL `booking_db` + OpenSearch | `asistencia.registrada`, `clase.actualizada` | `membresia.cancelada`, `usuario.desactivado` |
-| `booking-indexer` | — | Consumidor | OpenSearch `clases` | — | `clase.actualizada` |
+| `booking-service` (×2 con Traefik desde la etapa de balanceo; hoy ×1) | 8082 | **Hexagonal + CQRS** | PostgreSQL `booking_db` + OpenSearch | `asistencia.registrada`, `clase.actualizada` | `membresia.cancelada`, `usuario.desactivado` |
+| `booking-indexer` | 8086 (solo health) | Consumidor | OpenSearch `clases` | — | `clase.actualizada` |
 | `benefits-service` | 8083 | **Hexagonal** | PostgreSQL `benefits_db` | — | `asistencia.registrada` |
 | `training-service` | 8084 | **Capas** | MongoDB `training_db` | — | — |
 | `notification-worker` | 8085 | Consumidor | MongoDB `notifications_db` | — | `membresia.activada` |
@@ -43,18 +43,23 @@ Además (aprobado 2026-10-07): members publica `membresia.cancelada` y `usuario.
 ## Estructura de carpetas
 
 ```text
-gateway/                     api-gateway
+go.work                      une todos los módulos Go (cada go.mod usa replace ../../pkg)
+.env.example                 variables del stack local (cp .env.example .env; .env nunca se commitea)
+gateway/                     api-gateway: internal/{config,proxy,status,middleware,server}
 services/<servicio>/         un módulo Go por servicio
-  cmd/<binario>/             main.go
+  cmd/<binario>/             main.go (solo cableado)
   internal/                  código privado del servicio
-  migrations/                SQL versionado (servicios con Postgres)
-pkg/                         librerías técnicas compartidas (sin dominio)
-web/                         frontend
-deploy/                      compose, init de bases, rabbitmq, traefik, observabilidad
-docs/                        ARCHITECTURE, adr/, api/ (OpenAPI), events/ (JSON Schema)
+  migrations/                SQL versionado (servicios con Postgres, desde la etapa de cada uno)
+pkg/                         librerías técnicas compartidas (sin dominio):
+                             config, logger, correlation, problem, health, httpx, httpserver
+web/                         frontend (src/api/client.ts es el ÚNICO cliente HTTP; habla solo con el gateway)
+deploy/                      docker-compose.yml, docker-compose.mock.yml, postgres/init, mongo/init
+docs/                        ARCHITECTURE, adr/, contracts/, api/ (OpenAPI interno), events/ (JSON Schema)
 tests/load/                  k6
 tests/e2e/                   flujos del SPEC §11
 ```
+
+Todo proceso Go arranca igual (ver cualquier `cmd/*/main.go`): `config.Load()` → `logger.New` → `signal.NotifyContext` → adaptadores → `httpx.NewRouter` + `health.Register` → `httpserver.Run` (graceful shutdown).
 
 ### Patrón CAPAS (members, training)
 
@@ -67,16 +72,18 @@ internal/model/        entidades y DTOs
 
 Dependencias solo hacia abajo: handler → service → repository. El handler nunca usa el repository.
 
-### Patrón HEXAGONAL (booking, benefits)
+### Patrón HEXAGONAL (booking, benefits) — ADR-002
 
 ```text
 internal/domain/                 entidades, value objects, reglas, errores de dominio
-internal/application/            casos de uso + puertos (interfaces de entrada y salida)
-internal/adapters/in/{http,amqp}/
-internal/adapters/out/{postgres,opensearch,members,outbox}/
+internal/application/            casos de uso + puertos de ENTRADA
+internal/ports/                  puertos de SALIDA (repositorios, members, outbox, reloj…)
+internal/adapters/http/          adaptador de entrada HTTP (Gin)
+internal/adapters/postgres/      adaptador de salida a PostgreSQL
+internal/adapters/…              amqp, opensearch, members, outbox cuando hagan falta
 ```
 
-`domain` **no importa** nada de infraestructura (ni Gin, ni drivers, ni `net/http`, ni `pkg/` técnico). `application` depende solo de `domain` y de sus propios puertos. Los adaptadores implementan los puertos. El cableado se hace en `cmd/`.
+`domain` **solo usa la biblioteca estándar** (ni Gin, ni drivers, ni `net/http`, ni `encoding/json`, ni `pkg/`) y sus structs **no llevan tags** (`json`, `db`, `gorm`, `bson`). `application` y `ports` dependen solo de `domain`. Los adaptadores implementan los puertos y hacen el mapeo de formatos. El cableado se hace en `cmd/`. Lo verifican los tests `internal/domain/architecture_test.go`: si fallan, el cambio viola el patrón.
 
 ## Convenciones
 
@@ -95,7 +102,9 @@ internal/adapters/out/{postgres,opensearch,members,outbox}/
 ### Nombres
 
 - Dominio en **español** según el glosario del SPEC, sin tildes en identificadores (`Reserva`, `Membresia`, `CuentaBeneficios`). Términos técnicos en inglés (`Repository`, `Handler`).
-- Endpoints: `/api/v1/<recurso-plural-kebab>`; API de partners: `/partner-api/v1/...`; internos: `/internal/v1/...` (el gateway no los expone).
+- Endpoints públicos: prefijos en **inglés** (`/api/v1/auth`, `users`, `memberships`, `activities`, `classes`, `bookings`, `attendance`, `benefits`, `training`, `nutrition`; tabla en ARCHITECTURE §5.2). Un prefijo nuevo se agrega en `gateway/internal/config` y en esa tabla. API de partners: `/partner-api/v1/...`; internos: `/internal/v1/...` (el gateway responde 404 a cualquier ruta con un segmento `internal`).
+- Header de correlación: `X-Correlation-ID`. Lo maneja `pkg/correlation`; para llamadas salientes usá `correlation.Transport`.
+- Salud: `/health/live` y `/health/ready` con `pkg/health`. Cada dependencia propia nueva (Redis, RabbitMQ, OpenSearch…) se agrega como `health.Check` del servicio que la usa.
 - JSON y columnas: `snake_case`. **Excepción:** el contrato público para partners ([docs/contracts/](docs/contracts/README.md)) usa inglés y `camelCase` (ADR-008). Eventos: `<entidad>.<participio>`. Variables de entorno: `UPPER_SNAKE` con prefijo del servicio.
 - Fechas en APIs y eventos: RFC 3339 UTC. Reglas de negocio ("hoy", "vence hoy", "10 minutos antes"): zona `America/Argentina/Buenos_Aires`, siempre con un `Clock` inyectable.
 
@@ -105,17 +114,19 @@ Conventional Commits y GitHub Flow; ver [CONTRIBUTING.md](CONTRIBUTING.md). Rama
 
 ## Comandos
 
-> Se crean en la etapa de implementación. Si un comando no existe todavía, no lo inventes: avisá.
+> Si un comando no está en esta tabla, no existe todavía: no lo inventes, avisá. En Windows, `make` se ejecuta desde Git Bash o WSL.
 
 | Comando | Qué hace |
 |---|---|
-| `make up` | Levanta todo el stack con Docker Compose |
-| `make up-core` | Stack sin observabilidad (máquinas con poca RAM) |
-| `make down` | Baja el stack |
-| `make test` | Tests unitarios y de integración de todos los módulos |
-| `make lint` | `gofmt`, `go vet`, `golangci-lint`, lint del frontend |
-| `make logs s=<servicio>` | Logs de un servicio |
-| `make load-test` | Pruebas k6 |
+| `cp .env.example .env && make up` | Construye y levanta todo el stack; espera a que esté *healthy* |
+| `make down` / `make clean` | Baja el stack / lo baja y borra los volúmenes |
+| `make logs s=<servicio>` / `make ps` | Logs en vivo / estado de los contenedores |
+| `make test` | `go test ./...` en todos los módulos (integración con testcontainers; se saltean si no hay Docker) |
+| `make lint` | `go vet` + `golangci-lint` (si está instalado) + `tsc` del frontend (si hay `web/node_modules`) |
+| `make fmt` / `make tidy` | `gofmt -w` / `go mod tidy` en todos los módulos |
+| `make mock-up` / `make contract-lint` | Mock de Prism del contrato de partners / validación con Spectral |
+
+Equivalente sin make: `docker compose --env-file .env -f deploy/docker-compose.yml up -d --build --wait`, y `cd <módulo> && go test ./...` por módulo.
 
 ## Reglas que toda IA debe respetar en este repo
 

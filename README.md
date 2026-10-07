@@ -2,7 +2,7 @@
 
 Trabajo Práctico Integrador de **Arquitectura de Software**: un sistema de microservicios para gestionar un gimnasio — alumnos, membresías, clases y reservas, asistencia, entrenamiento, nutrición y un **Club de Beneficios** con puntos que también usan sistemas de otros grupos.
 
-> Estado: **etapa 03 — contrato de la API de partners publicado, con mock**. Todavía no hay código de aplicación.
+> Estado: **esqueleto del proyecto**. Todos los servicios arrancan, verifican sus bases y reportan su estado en una pantalla web; todavía no hay funcionalidades de negocio. El contrato de la API de partners ya está publicado, con mock.
 
 ## Dominio
 
@@ -34,19 +34,19 @@ sequenceDiagram
     participant N as notification-worker
 
     Admin->>GW: Asignar membresía
-    GW->>M: POST /membresias
+    GW->>M: POST /api/v1/memberships
     M-->>N: membresia.activada (evento)
     N->>Alumno: Email de confirmación
     Alumno->>GW: Reservar clase
-    GW->>B: POST /reservas
+    GW->>B: POST /api/v1/bookings
     B->>M: ¿Membresía vigente?
     B-->>Alumno: Reserva confirmada (22/30 ocupados)
     Profesor->>GW: Registrar ASISTIÓ
-    GW->>B: POST /asistencias
+    GW->>B: POST /api/v1/attendance
     B-->>BE: asistencia.registrada (evento)
     BE->>BE: +10 puntos (una sola vez)
     Alumno->>GW: Canjear beneficio
-    GW->>BE: POST /canjes
+    GW->>BE: POST /api/v1/benefits/redemptions
 ```
 
 El detalle completo, con criterios de aceptación, está en [SPEC.md §11](SPEC.md#11-criterios-de-aceptación-del-flujo-principal-de-punta-a-punta).
@@ -58,34 +58,70 @@ El detalle completo, con criterios de aceptación, está en [SPEC.md §11](SPEC.
 | `web` | SPA para todos los actores | — | React + Vite + TS | 5173 |
 | `api-gateway` | Entrada única: JWT, rate limit, routing | Redis | Middlewares | 8080 |
 | `members-service` | Usuarios, login, roles, membresías | PostgreSQL `members_db` | Capas | 8081 |
-| `booking-service` (×2) | Actividades, clases, reservas, asistencia | PostgreSQL `booking_db` + OpenSearch | Hexagonal + CQRS | 8082 |
+| `booking-service` (+ `booking-indexer`) | Actividades, clases, reservas, asistencia | PostgreSQL `booking_db` + OpenSearch | Hexagonal + CQRS | 8082 (indexer 8086) |
 | `benefits-service` | Club de Beneficios y API v1 para partners | PostgreSQL `benefits_db` | Hexagonal | 8083 |
 | `training-service` | Planes, mediciones, consultas | MongoDB `training_db` | Capas | 8084 |
 | `notification-worker` | Emails de membresía | MongoDB `notifications_db` | Consumidor | 8085 |
 
 Más detalle en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## Cómo se ejecutará localmente
+## Cómo ejecutarlo localmente
 
-> Disponible a partir de la etapa de implementación.
+### Requisitos previos
 
-Requisitos: Docker + Docker Compose, GNU Make, Go 1.22+ y Node 20+ (solo para desarrollo fuera de contenedores). Se recomiendan ~8 GB de RAM libres.
+| Herramienta | Para qué | Versión |
+|---|---|---|
+| Docker + Docker Compose v2 | Levantar el stack | Docker Desktop reciente (Compose ≥ 2.20) |
+| GNU Make | Atajos `make up`, `make test`… | 4.x — en Windows: `winget install ezwinports.make`, y ejecutá `make` desde **Git Bash** o WSL |
+| Go | Tests y lint fuera de contenedores | 1.22 o superior |
+| Node.js | Solo para desarrollar el frontend fuera de Docker | 20 |
+
+Recursos: ~4 GB de RAM y **unos 6 GB libres en disco** para imágenes y builds del stack actual (crecerá con OpenSearch y la observabilidad).
+
+### Levantar todo
 
 ```bash
-cp deploy/compose/.env.example deploy/compose/.env
-make up          # levanta todo el stack
-make test        # tests unitarios y de integración (testcontainers)
-make down        # baja el stack
+cp .env.example .env && make up
 ```
 
-| URL | Qué es |
+`make up` construye las imágenes, levanta todos los contenedores y **espera a que estén healthy**. Después:
+
+- Abrí **http://localhost:5173**: la pantalla "Estado del sistema" debe mostrar todos los servicios en **Listo**.
+- O consultá el gateway: `curl http://localhost:8080/api/v1/status` → `"status": "ready"`.
+
+Sin `make`: `docker compose --env-file .env -f deploy/docker-compose.yml up -d --build --wait`.
+
+### Otros comandos
+
+| Comando | Qué hace |
 |---|---|
-| http://localhost:5173 | Frontend |
-| http://localhost:8080 | API Gateway |
-| http://localhost:8025 | Mailpit (emails enviados) |
-| http://localhost:15672 | RabbitMQ management |
-| http://localhost:16686 | Jaeger (trazas) |
-| http://localhost:3000 | Grafana (métricas y logs) |
+| `make down` | Baja el stack (conserva los datos) |
+| `make clean` | Baja el stack y borra los volúmenes |
+| `make logs s=api-gateway` | Logs en vivo (sin `s=`, de todos) |
+| `make ps` | Estado de los contenedores |
+| `make test` | Tests de todos los módulos Go (los de integración usan Docker con testcontainers) |
+| `make lint` | `go vet`, `golangci-lint` y chequeo de tipos del frontend |
+| `make fmt` | Formatea el código Go |
+| `make help` | Lista todos los comandos |
+
+### URLs de cada componente
+
+| URL | Componente |
+|---|---|
+| http://localhost:5173 | Frontend (pantalla "Estado del sistema") |
+| http://localhost:8080 | api-gateway — único punto de entrada |
+| http://localhost:8080/api/v1/status | Estado agregado de todos los servicios |
+| http://localhost:4010 | Mock de la API de partners (Prism) |
+| http://localhost:15672 | RabbitMQ management (usuario y contraseña en `.env`) |
+| http://127.0.0.1:8081/health/ready | members-service (acceso directo solo para depurar) |
+| http://127.0.0.1:8082/health/ready | booking-service |
+| http://127.0.0.1:8083/health/ready | benefits-service |
+| http://127.0.0.1:8084/health/ready | training-service |
+| http://127.0.0.1:8085/health/ready | notification-worker |
+| http://127.0.0.1:8086/health/ready | booking-indexer |
+| `127.0.0.1:5432` / `127.0.0.1:27017` / `127.0.0.1:6379` | PostgreSQL / MongoDB / Redis (credenciales en `.env`) |
+
+Mailpit, Jaeger, Grafana, Traefik y OpenSearch se suman en las etapas que los usan.
 
 ## Mock de la API de partners (disponible ya)
 

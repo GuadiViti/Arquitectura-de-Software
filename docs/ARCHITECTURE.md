@@ -222,7 +222,7 @@ flowchart LR
 | # | Middleware | Comportamiento |
 |---|---|---|
 | 1 | Recovery + access log | Nunca cae por un pánico; log estructurado de cada request. |
-| 2 | Correlation ID | Toma `X-Correlation-Id` si viene y es un UUID válido; si no, genera uno. Lo propaga a los servicios y lo devuelve en la respuesta. |
+| 2 | Correlation ID | Toma `X-Correlation-ID` si viene y es válido (8 a 128 caracteres `[A-Za-z0-9._:-]`); si no, genera un UUID v4. Lo propaga a los servicios y lo devuelve en la respuesta. |
 | 3 | Trazas OTel | Abre el span raíz y propaga `traceparent` (W3C). |
 | 4 | **Limpieza de identidad** | Borra **siempre** `X-User-Id`, `X-User-Role`, `X-Partner-Id` y cualquier `X-Internal-*` que mande el cliente. |
 | 5 | Autenticación | Rutas `/api/v1/**` (salvo login): valida JWT RS256 (firma, `exp`, `iss`, `aud`). Rutas `/partner-api/v1/**`: exige `X-API-Key` presente (la validación la hace benefits-service, dueño de los partners). |
@@ -231,18 +231,27 @@ flowchart LR
 | 8 | Routing semántico | Por prefijo de recurso (ver 5.2). Rutas `/internal/**` → `404` (nunca se exponen). |
 | 9 | Timeout por ruta | `context.WithTimeout` por ruta; vencido → `504` RFC 7807. |
 
-### 5.2 Tabla de routing (inicial)
+### 5.2 Tabla de routing
 
-| Prefijo público | Destino | Timeout | Rate limit inicial |
-|---|---|---|---|
-| `POST /api/v1/auth/login` | members-service | 3 s | 5 req/min por IP |
-| `/api/v1/usuarios`, `/alumnos`, `/profesionales`, `/asignaciones`, `/tipos-membresia`, `/membresias` | members-service | 3 s | 10 req/s, ráfaga 20, por usuario |
-| `/api/v1/actividades`, `/horarios`, `/clases`, `/reservas`, `/asistencias` | Traefik → booking-service | 3 s lectura / 5 s escritura | 10 req/s, ráfaga 20, por usuario |
-| `/api/v1/cuenta`, `/movimientos`, `/beneficios`, `/canjes`, `/partners` | benefits-service | 3 s / 5 s | 10 req/s, ráfaga 20, por usuario |
-| `/api/v1/planes-entrenamiento`, `/planes-alimenticios`, `/mediciones`, `/consultas` | training-service | 3 s | 10 req/s, ráfaga 20, por usuario |
-| `/partner-api/v1/**` | benefits-service | 5 s | 20 req/s, ráfaga 40, por API key |
+Los prefijos públicos de recurso van en **inglés** (decisión de la etapa de esqueleto, para alinear con las consignas del TP); el dominio, el código y los campos JSON siguen la convención de §12.2. Cada prefijo cubre la ruta exacta y todo lo que cuelga de ella (`/api/v1/bookings` y `/api/v1/bookings/…`). El timeout de cada ruta se configura con `GATEWAY_TIMEOUT_<CLAVE>` (por defecto `GATEWAY_TIMEOUT_DEFAULT`, 3 s).
 
-Los valores son iniciales; se ajustan con las pruebas de carga (k6).
+| Prefijo público | Destino | Clave de timeout | Timeout inicial | Rate limit previsto |
+|---|---|---|---|---|
+| `/api/v1/auth` | members-service | `AUTH` | 3 s | 5 req/min por IP (login) |
+| `/api/v1/users` | members-service | `USERS` | 3 s | 10 req/s, ráfaga 20, por usuario |
+| `/api/v1/memberships` | members-service | `MEMBERSHIPS` | 3 s | ídem |
+| `/api/v1/activities` | booking-service | `ACTIVITIES` | 3 s | ídem |
+| `/api/v1/classes` | booking-service | `CLASSES` | 3 s | ídem |
+| `/api/v1/bookings` | booking-service | `BOOKINGS` | 5 s | ídem |
+| `/api/v1/attendance` | booking-service | `ATTENDANCE` | 5 s | ídem |
+| `/api/v1/benefits` | benefits-service | `BENEFITS` | 5 s | ídem |
+| `/api/v1/training` | training-service | `TRAINING` | 3 s | ídem |
+| `/api/v1/nutrition` | training-service | `NUTRITION` | 3 s | ídem |
+| `/partner-api/v1` | benefits-service | `PARTNER_API` | 5 s | 20 req/s, ráfaga 40, por API key |
+
+Endpoints propios del gateway: `GET /api/v1/status` (resumen del `/health/ready` de cada servicio, ver §12.3), `GET /health/live` y `GET /health/ready`. Cualquier ruta con un segmento `internal` responde `404`, también después de normalizar `..` y `%2e%2e`. Una ruta sin prefijo conocido responde `404 NO_ENCONTRADO`; un servicio caído, `502 DEPENDENCIA_NO_DISPONIBLE`; un timeout, `504 TIMEOUT`.
+
+Los sub-recursos de cada prefijo (ej. `/api/v1/users/{id}/assignments`, `/api/v1/benefits/redemptions`) se definen en la etapa de cada servicio. Los valores de timeout y rate limit son iniciales; se ajustan con las pruebas de carga (k6).
 
 ### 5.3 Comportamiento ante fallas de Redis
 
@@ -445,9 +454,13 @@ La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en 
 | `SALDO_INSUFICIENTE` | 422 | RN-23 |
 | `BENEFICIO_NO_DISPONIBLE` | 422 | RN-24 |
 | `CONFLICTO_IDEMPOTENCIA` / `OPERACION_EN_CURSO` | 409 | RN-15, RN-27 |
+| `METODO_NO_PERMITIDO` | 405 | Infraestructura (router común) |
 | `LIMITE_EXCEDIDO` | 429 | Gateway |
-| `DEPENDENCIA_NO_DISPONIBLE` | 503 | §6.1 |
+| `ERROR_INTERNO` | 500 | Infraestructura (pánico recuperado; nunca expone detalles) |
+| `DEPENDENCIA_NO_DISPONIBLE` | 502 (gateway → servicio) / 503 (servicio → dependencia) | §6.1 |
 | `TIMEOUT` | 504 | Gateway |
+
+Implementación común: `pkg/problem`. Los errores de la API pública de partners usan su propio catálogo en inglés (ADR-008).
 
 ### 12.2 Nombres
 
@@ -455,7 +468,9 @@ La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en 
 |---|---|---|
 | Términos de dominio | Español, según el glosario del SPEC, sin tildes en identificadores | `Reserva`, `Membresia`, `CuentaBeneficios` |
 | Términos técnicos | Inglés | `Repository`, `Handler`, `Publisher` |
-| Endpoints | `/api/v1/<recurso-plural>` en kebab-case español | `/api/v1/planes-entrenamiento` |
+| Endpoints públicos | `/api/v1/<recurso-plural>` en inglés, kebab-case (ver §5.2) | `/api/v1/bookings` |
+| Endpoints internos | `/internal/v1/<recurso>`; el gateway nunca los expone | `/internal/v1/alumnos/{id}/vigencia` |
+| Header de correlación | `X-Correlation-ID` | — |
 | JSON | snake_case | `fecha_vencimiento` |
 | Eventos | `<entidad>.<participio>` en minúscula | `asistencia.registrada` |
 | Tablas / colecciones | snake_case plural | `movimientos_puntos` |
@@ -464,7 +479,39 @@ La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en 
 
 ### 12.3 Endpoints comunes de todo servicio
 
-`GET /health/live`, `GET /health/ready` (verifica sus dependencias propias), `GET /metrics` (si no se exporta por OTLP).
+Todo proceso Go (servicios, indexer, worker y gateway) expone:
+
+| Endpoint | Responde | Uso |
+|---|---|---|
+| `GET /health/live` | `200 {"status":"alive","checks":{}}` mientras el proceso atienda | Liveness |
+| `GET /health/ready` | `200` si todas sus dependencias propias responden; si alguna falla, `503` con el detalle por dependencia | Readiness, healthcheck de Docker Compose y `/api/v1/status` |
+| `GET /metrics` | *(etapa de observabilidad)* | Prometheus |
+
+Cuerpo de `/health/ready` (implementado en `pkg/health`; es un informe de estado, no un error RFC 7807):
+
+```json
+{ "status": "not_ready", "checks": { "postgres": { "status": "down", "latency_ms": 2000, "error": "timeout" } } }
+```
+
+| Proceso | Dependencias verificadas en `/health/ready` |
+|---|---|
+| members-service, booking-service, booking-indexer, benefits-service | PostgreSQL (su propia base) |
+| training-service, notification-worker | MongoDB (su propia base) |
+| api-gateway | Ninguna (su estado agregado está en `/api/v1/status`) |
+
+`GET /api/v1/status` (gateway) consulta en paralelo el `/health/ready` de cada proceso y devuelve `200` si todos están `ready` o `503` si alguno no lo está:
+
+```json
+{
+  "status": "ready",
+  "checked_at": "2026-10-07T20:00:00Z",
+  "services": [
+    { "name": "members-service", "status": "ready", "latency_ms": 3, "checks": { "postgres": "up" } }
+  ]
+}
+```
+
+Estados por servicio: `ready`, `not_ready` (respondió 503) o `unreachable` (no respondió). Por ser un endpoint público, **no** reenvía los mensajes de error internos de cada dependencia.
 
 ---
 
@@ -476,50 +523,53 @@ La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en 
 ├── README.md
 ├── CONTRIBUTING.md
 ├── CLAUDE.md
-├── Makefile                        # make up | down | test | lint | logs | load-test …
-├── go.work                         # Workspace Go: un módulo por servicio + pkg
+├── Makefile                        # make up | down | logs | ps | test | lint | fmt | tidy | mock-up | contract-lint
+├── go.work                         # Workspace Go: un módulo por servicio + gateway + pkg
+├── .env.example                    # Variables del stack local (cp .env.example .env)
+├── .golangci.yml                   # golangci-lint v2, compartido
 ├── .github/
-│   └── workflows/                  # CI: lint, test, build de imágenes
+│   └── workflows/                  # ci.yml (vet, golangci-lint, tests, build web) y contract.yml
 ├── gateway/                        # api-gateway (módulo Go propio)
 │   ├── cmd/gateway/
-│   ├── internal/{middleware,proxy,routes,config}/
+│   ├── internal/{config,proxy,status,middleware,server}/
 │   └── Dockerfile
 ├── services/
 │   ├── members-service/            # CAPAS
 │   │   ├── cmd/api/
-│   │   ├── internal/{handler,service,repository,model,config}/
-│   │   ├── migrations/
+│   │   ├── internal/{config,handler,service,repository,model}/
+│   │   ├── migrations/             # (etapa de usuarios)
 │   │   └── Dockerfile
 │   ├── booking-service/            # HEXAGONAL + CQRS
 │   │   ├── cmd/{api,indexer}/
 │   │   ├── internal/
-│   │   │   ├── domain/             # entidades, value objects, reglas, errores (sin imports de infra)
-│   │   │   ├── application/        # casos de uso + puertos (interfaces in/out)
-│   │   │   └── adapters/
-│   │   │       ├── in/{http,amqp}/
-│   │   │       └── out/{postgres,opensearch,members,outbox}/
-│   │   ├── migrations/
-│   │   └── Dockerfile
+│   │   │   ├── config/
+│   │   │   ├── domain/             # entidades, value objects, reglas, errores (solo stdlib, sin tags)
+│   │   │   ├── application/        # casos de uso + puertos de ENTRADA
+│   │   │   ├── ports/              # puertos de SALIDA (repositorios, members, outbox, reloj…)
+│   │   │   └── adapters/{http,postgres,…}/   # amqp, opensearch, members, outbox a medida que se necesiten
+│   │   ├── migrations/             # (etapa de clases y reservas)
+│   │   └── Dockerfile              # una imagen con los binarios booking-service y booking-indexer
 │   ├── benefits-service/           # HEXAGONAL (misma forma que booking, sin indexer)
 │   ├── training-service/           # CAPAS (repository sobre MongoDB)
 │   └── notification-worker/
 │       ├── cmd/worker/
-│       └── internal/{consumer,mailer,store}/
+│       └── internal/{config,consumer,mailer,store}/
 ├── pkg/                            # Librerías técnicas compartidas (NUNCA lógica de dominio)
+│   ├── config/                     # lectura de variables de entorno con errores acumulados
+│   ├── logger/                     # slog JSON con service y correlation_id
+│   ├── correlation/                # X-Correlation-ID: middleware, context y propagación saliente
 │   ├── problem/                    # RFC 7807
-│   ├── observability/              # setup OTel, slog
-│   ├── events/                     # envelope, publisher, consumer base, reintentos
-│   ├── outbox/                     # tabla + relay
-│   ├── idempotency/
-│   └── httpclient/                 # timeouts, reintentos, circuit breaker, propagación
-├── web/                            # React + Vite + TypeScript
+│   ├── health/                     # /health/live y /health/ready
+│   ├── httpx/                      # router Gin base (correlation, access log, recovery, 404/405)
+│   └── httpserver/                 # servidor HTTP con graceful shutdown
+│                                   # (más adelante: events, outbox, idempotency, httpclient, observability)
+├── web/                            # React + Vite + TypeScript (nginx en el contenedor)
 ├── deploy/
-│   ├── compose/                    # docker-compose.yml, .env.example
-│   ├── postgres/                   # init: bases y usuarios por servicio
-│   ├── rabbitmq/                   # definitions.json (exchanges, colas, bindings)
-│   ├── traefik/
-│   ├── opensearch/                 # mappings del índice clases
-│   └── observability/              # otel-collector, prometheus, loki, grafana (dashboards)
+│   ├── docker-compose.yml          # stack local completo
+│   ├── docker-compose.mock.yml     # solo el mock de Prism del contrato de partners
+│   ├── postgres/init/              # crea members_db, booking_db, benefits_db con un usuario cada una
+│   ├── mongo/init/                 # crea un usuario por base (training_db, notifications_db)
+│   └── …                           # (más adelante: rabbitmq/, traefik/, opensearch/, observability/)
 ├── docs/
 │   ├── ARCHITECTURE.md
 │   ├── adr/
@@ -531,7 +581,7 @@ La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en 
     └── e2e/                        # flujos E2E del SPEC §11 contra el stack levantado
 ```
 
-**Módulos Go:** un `go.mod` por servicio, por `gateway/` y por `pkg/`, unidos con `go.work`. Así cada imagen compila solo lo suyo y un servicio no puede importar `internal/` de otro.
+**Módulos Go:** un `go.mod` por servicio, por `gateway/` y por `pkg/`, unidos con `go.work`. Cada `go.mod` de servicio referencia `pkg` con `replace ../../pkg`, así la imagen Docker compila sin `go.work`. Un servicio no puede importar `internal/` de otro. El patrón de cada servicio está en [ADR-002](adr/ADR-002-patrones-internos.md).
 
 ---
 
@@ -539,26 +589,29 @@ La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en 
 
 ### 14.1 Local (Docker Compose, `make up`)
 
-| Contenedor | Imagen / build | Puerto host | Réplicas |
-|---|---|---|---|
-| `web` | build `web/` (Vite dev server) | 5173 | 1 |
-| `api-gateway` | build `gateway/` | 8080 | 1 |
-| `members-service` | build | 8081 (solo dev) | 1 |
-| `traefik` | traefik v3 | 8090 (dashboard, dev) | 1 |
-| `booking-service` | build | 8082 (solo dev, vía Traefik) | **2** |
-| `booking-indexer` | build (mismo módulo) | — | 1 |
-| `benefits-service` | build | 8083 (solo dev) | 1 |
-| `training-service` | build | 8084 (solo dev) | 1 |
-| `notification-worker` | build | 8085 (health/metrics) | 1 |
-| `postgres` | postgres:16 | 5432 | 1 (3 bases) |
-| `mongo` | mongo:7 (replica set de 1 nodo) | 27017 | 1 |
-| `redis` | redis:7 | 6379 | 1 |
-| `rabbitmq` | rabbitmq:3-management | 5672 / 15672 | 1 |
-| `opensearch` (+ dashboards opcional) | opensearch 2.x | 9200 | 1 |
-| `mailpit` | axllent/mailpit | 1025 / 8025 | 1 |
-| `otel-collector`, `jaeger`, `prometheus`, `loki`, `grafana` | oficiales | 4317 / 16686 / 9090 / 3100 / 3000 | 1 c/u |
+`deploy/docker-compose.yml`, con las variables de `.env` (copia de `.env.example`). Todos los contenedores tienen healthcheck y cada uno espera a sus dependencias con `depends_on: condition: service_healthy`; `make up` usa `--wait` y termina cuando todo está *healthy*. Solo el gateway (8080) y el web (5173) se publican en todas las interfaces; el resto se publica en `127.0.0.1` para depurar.
 
-Requisito estimado: ~8 GB de RAM libres para el stack completo (OpenSearch y la observabilidad son lo más pesado). El Makefile ofrecerá `make up-core` (sin observabilidad ni OpenSearch dashboards) para máquinas justas.
+| Contenedor | Imagen / build | Puerto host | Réplicas | ¿En el compose? |
+|---|---|---|---|---|
+| `web` | build `web/`: Vite compila estáticos, nginx los sirve | 5173 | 1 | Sí |
+| `api-gateway` | build `gateway/` | 8080 | 1 | Sí |
+| `members-service` | build | 127.0.0.1:8081 | 1 | Sí |
+| `booking-service` | build | 127.0.0.1:8082 | 1 (2 detrás de Traefik más adelante) | Sí |
+| `booking-indexer` | misma imagen que booking, entrypoint `/app/booking-indexer` | 127.0.0.1:8086 (health) | 1 | Sí (esqueleto) |
+| `benefits-service` | build | 127.0.0.1:8083 | 1 | Sí |
+| `training-service` | build | 127.0.0.1:8084 | 1 | Sí |
+| `notification-worker` | build | 127.0.0.1:8085 (health) | 1 | Sí (esqueleto) |
+| `postgres` | postgres:16-alpine | 127.0.0.1:5432 | 1 (3 bases, 3 usuarios) | Sí |
+| `mongo` | mongo:7 (standalone con usuarios por base) | 127.0.0.1:27017 | 1 | Sí |
+| `redis` | redis:7-alpine (con contraseña) | 127.0.0.1:6379 | 1 | Sí (lo usará el rate limiting) |
+| `rabbitmq` | rabbitmq:3-management | 127.0.0.1:5672 / 15672 | 1 | Sí (lo usarán los eventos) |
+| `benefits-mock` | stoplight/prism:5.15.10 (contrato de partners) | 4010 | 1 | Sí |
+| `traefik` | traefik v3 | — | 1 | No, etapa de balanceo |
+| `opensearch` | opensearch 2.x | — | 1 | No, etapa de CQRS |
+| `mailpit` | axllent/mailpit | — | 1 | No, etapa de notificaciones |
+| `otel-collector`, `jaeger`, `prometheus`, `loki`, `grafana` | oficiales | — | 1 c/u | No, etapa de observabilidad |
+
+Requisitos: ~8 GB de RAM y **al menos 15 GB libres en disco** para imágenes y builds cuando el stack esté completo (hoy, con el esqueleto, alrededor de 6 GB).
 
 ### 14.2 Nube
 
@@ -592,7 +645,10 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | L-11 | **Procesos programados en servicios replicados** (SIN_REGISTRO, vencimientos). | Doble ejecución. | `pg_advisory_lock` por job. |
 | L-12 | **Sin registro de esquemas** de eventos. | Rupturas de contrato detectadas tarde. | JSON Schema en `docs/events/` + tests de contrato en CI. |
 | L-13 | **Más dependencias síncronas hacia members** (asignaciones desde training, datos de alumnos desde booking), agregadas para cumplir RN-30 y HU-21. | members concentra más tráfico y su caída degrada training y los listados. | Caché de 60 s en training; listados degradan a IDs sin nombre. |
-| L-14 | **Stack local pesado** (~8 GB). | Máquinas modestas pueden no levantarlo completo. | Perfil `make up-core`. |
+| L-14 | **Stack local pesado** (~8 GB de RAM, 15 GB de disco). | Máquinas modestas pueden no levantarlo completo. | Perfil reducido sin observabilidad cuando esta se agregue; Dockerfiles con caché de módulos compartida. |
+| L-15 | **MongoDB standalone** (ADR-003 prevé un replica set de 1 nodo). | Sin transacciones multi-documento. | Ninguna operación las necesita todavía; se pasa a replica set cuando un caso de uso lo requiera. |
+| L-16 | **booking-service con 1 réplica y sin Traefik** en el esqueleto. | No se demuestra balanceo todavía. | Se agrega en la etapa de balanceo (2 réplicas + Traefik con health checks). |
+| L-17 | **Healthchecks de compose sobre `/health/ready`**. | Si la base de un servicio cae, Docker lo marca *unhealthy* (no lo reinicia). | Es lo esperado: el estado se ve en `/api/v1/status`. |
 
 ---
 
@@ -602,7 +658,7 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 |---|---|---|
 | [ADR-000](adr/ADR-000-plantilla.md) | Plantilla | — |
 | [ADR-001](adr/ADR-001-limites-de-servicios.md) | D1 — Límites de servicios | Aceptado |
-| ADR-002 | D2 — *reservado* | — |
+| [ADR-002](adr/ADR-002-patrones-internos.md) | D2 — Patrón interno de cada servicio (Capas y Hexagonal) | Aceptado |
 | [ADR-003](adr/ADR-003-persistencia.md) | D3 — Persistencia por servicio (versión inicial) | Aceptado |
 | ADR-004 | D4 — *reservado* | — |
 | [ADR-005](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona (versión inicial) | Aceptado |
