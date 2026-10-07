@@ -1,0 +1,607 @@
+# Arquitectura — Sistema Integral de Gestión de Gimnasio
+
+> Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
+>
+> - Versión: 1.0 (etapa 02 — definición de arquitectura)
+> - Fecha: 2026-10-07
+> - Incluye tres decisiones agregadas y aprobadas por el equipo (2026-10-07) para cubrir huecos con el SPEC: eventos `membresia.cancelada` y `usuario.desactivado`, consulta de asignaciones training → members y consulta de datos de alumnos booking → members. Registro completo en [Registro_de_Decisiones_Gimnasio.docx](../Registro_de_Decisiones_Gimnasio.docx) (D-20 a D-23).
+
+---
+
+## Índice
+
+1. [Visión general](#1-visión-general)
+2. [Diagrama C4 — Contexto](#2-diagrama-c4--contexto)
+3. [Diagrama C4 — Contenedores](#3-diagrama-c4--contenedores)
+4. [Servicios](#4-servicios)
+5. [API Gateway](#5-api-gateway)
+6. [Comunicaciones síncronas y asíncronas](#6-comunicaciones-síncronas-y-asíncronas)
+7. [Catálogo inicial de eventos](#7-catálogo-inicial-de-eventos)
+8. [Mensajería: topología, outbox e idempotencia](#8-mensajería-topología-outbox-e-idempotencia)
+9. [Datos, caché y búsqueda](#9-datos-caché-y-búsqueda)
+10. [Seguridad](#10-seguridad)
+11. [Observabilidad](#11-observabilidad)
+12. [Convenciones transversales](#12-convenciones-transversales)
+13. [Estructura del monorepo](#13-estructura-del-monorepo)
+14. [Distribución de componentes](#14-distribución-de-componentes)
+15. [Limitaciones conocidas y deuda técnica](#15-limitaciones-conocidas-y-deuda-técnica)
+16. [Índice de ADR](#16-índice-de-adr)
+
+---
+
+## 1. Visión general
+
+El sistema se construye como un conjunto de **microservicios** organizados por **capacidad de negocio**, cada uno dueño de sus datos, detrás de un **API Gateway** propio que es el único punto de entrada del frontend y de los partners.
+
+| Aspecto | Decisión |
+|---|---|
+| Backend | Go 1.22+ con Gin |
+| Frontend | React + Vite + TypeScript (SPA) |
+| Entrada | `api-gateway` en Go: JWT, identidad, rate limiting, routing semántico, correlation ID, timeouts |
+| Servicios de negocio | `members-service`, `booking-service` (×2 detrás de Traefik), `benefits-service`, `training-service` |
+| Procesos de soporte | `booking-indexer` (CQRS de lectura), `notification-worker` (emails) |
+| Persistencia | PostgreSQL (una instancia, una base por servicio) y MongoDB (training y notificaciones) |
+| Mensajería | RabbitMQ, exchange topic `gym.events`, Transactional Outbox, consumidores idempotentes |
+| Caché / búsqueda | Redis (cache-aside y rate limiting) / OpenSearch (lectura de clases) |
+| Observabilidad | OpenTelemetry → OTel Collector → Jaeger (trazas), Prometheus (métricas), Loki (logs), Grafana |
+| Ejecución | Docker Compose + Makefile (`make up`); CI con GitHub Actions |
+| Pruebas | `go test` + testify + testcontainers-go; carga con k6 |
+
+**Principios que guían el diseño**
+
+1. **Un servicio, una capacidad, una base.** Ningún servicio lee ni escribe la base de otro (ADR-001, ADR-003).
+2. **Las invariantes fuertes viven dentro de un servicio.** Cupo y reserva están juntos en `booking-service`; saldo y movimientos juntos en `benefits-service`. No hay transacciones distribuidas.
+3. **Síncrono solo cuando la respuesta lo necesita** (verificar membresía vigente antes de reservar). Todo lo demás se propaga con eventos (ADR-005).
+4. **Al menos una vez + idempotencia = efecto exactamente una vez.** Outbox para publicar, deduplicación para consumir.
+5. **El gateway es la frontera de confianza.** Los servicios confían en `X-User-Id` / `X-User-Role` porque solo el gateway puede llegar a ellos.
+
+---
+
+## 2. Diagrama C4 — Contexto
+
+```mermaid
+flowchart TB
+    admin["👤 Administrador<br/><i>Gestiona alumnos, profesionales,<br/>membresías, clases y beneficios</i>"]
+    prof["👤 Profesional<br/><i>Profesor: clases, asistencia, entrenamiento<br/>Nutricionista: planes, mediciones, consultas</i>"]
+    alumno["👤 Alumno<br/><i>Reserva clases, consulta planes,<br/>membresía y Club de Beneficios</i>"]
+    partner["🖥️ Partner externo<br/><i>Sistema de otro grupo que usa<br/>la API pública de puntos</i>"]
+
+    gym["<b>Sistema de Gestión de Gimnasio</b><br/><i>Membresías, clases y reservas, asistencia,<br/>entrenamiento, nutrición y Club de Beneficios</i>"]
+
+    smtp["📧 Servidor de email (SMTP)<br/><i>Mailpit en local</i>"]
+
+    admin -- "Usa (HTTPS, navegador)" --> gym
+    prof -- "Usa (HTTPS, navegador)" --> gym
+    alumno -- "Usa (HTTPS, navegador)" --> gym
+    partner -- "Acredita, debita, canjea y consulta puntos<br/>(HTTPS, API v1 + API key)" --> gym
+    gym -- "Envía email de confirmación<br/>de membresía (SMTP)" --> smtp
+    smtp -. "Entrega" .-> alumno
+
+    classDef person fill:#08427b,stroke:#052e56,color:#fff
+    classDef system fill:#1168bd,stroke:#0b4884,color:#fff
+    classDef external fill:#999,stroke:#6b6b6b,color:#fff
+    class admin,prof,alumno person
+    class gym system
+    class partner,smtp external
+```
+
+---
+
+## 3. Diagrama C4 — Contenedores
+
+```mermaid
+flowchart LR
+    subgraph clients["Clientes"]
+        web["<b>web</b><br/>React + Vite + TS<br/>:5173"]
+        partner["Partner externo"]
+    end
+
+    subgraph edge["Borde"]
+        gw["<b>api-gateway</b><br/>Go + Gin · :8080<br/>JWT · rate limit · routing"]
+    end
+
+    subgraph services["Servicios de negocio"]
+        members["<b>members-service</b><br/>Go · Capas · :8081"]
+        traefik["<b>Traefik</b><br/>LB interno + health checks"]
+        booking1["<b>booking-service #1</b><br/>Go · Hexagonal · :8082"]
+        booking2["<b>booking-service #2</b><br/>Go · Hexagonal · :8082"]
+        benefits["<b>benefits-service</b><br/>Go · Hexagonal · :8083"]
+        training["<b>training-service</b><br/>Go · Capas · :8084"]
+    end
+
+    subgraph workers["Procesos asíncronos"]
+        indexer["<b>booking-indexer</b><br/>Go"]
+        notif["<b>notification-worker</b><br/>Go · :8085"]
+    end
+
+    subgraph data["Datos"]
+        pg[("<b>PostgreSQL</b><br/>members_db · booking_db<br/>benefits_db")]
+        mongo[("<b>MongoDB</b><br/>training_db<br/>notifications_db")]
+        redis[("<b>Redis</b><br/>rate limit · caché")]
+        os[("<b>OpenSearch</b><br/>índice clases")]
+    end
+
+    mq{{"<b>RabbitMQ</b><br/>exchange gym.events"}}
+    smtp["SMTP / Mailpit"]
+
+    web -->|"HTTPS/JSON + JWT"| gw
+    partner -->|"HTTPS/JSON + API key<br/>+ Idempotency-Key"| gw
+    gw -->|"HTTP"| members
+    gw -->|"HTTP"| traefik
+    traefik --> booking1
+    traefik --> booking2
+    gw -->|"HTTP"| benefits
+    gw -->|"HTTP"| training
+    gw -.->|"token bucket"| redis
+
+    booking1 & booking2 -->|"HTTP síncrono<br/>membresía vigente"| members
+    training -->|"HTTP síncrono<br/>asignaciones"| members
+
+    members --> pg
+    booking1 & booking2 --> pg
+    benefits --> pg
+    training --> mongo
+    notif --> mongo
+    booking1 & booking2 -->|"consultas de clases"| os
+    booking1 & booking2 & benefits & members -.->|"cache-aside"| redis
+
+    members -->|"outbox relay → publica"| mq
+    booking1 & booking2 -->|"outbox relay → publica"| mq
+    mq -->|"membresia.activada"| notif
+    mq -->|"asistencia.registrada"| benefits
+    mq -->|"clase.actualizada"| indexer
+    mq -.->|"membresia.cancelada<br/>usuario.desactivado"| booking1
+    indexer --> os
+    notif -->|"SMTP"| smtp
+```
+
+> Observabilidad (OTel Collector, Jaeger, Prometheus, Loki, Grafana) se omite del diagrama por claridad: **todos** los contenedores Go exportan trazas, métricas y logs al OTel Collector (ver §11).
+
+---
+
+## 4. Servicios
+
+### 4.1 Tabla resumen
+
+| Servicio | Responsabilidad | Entidades (SPEC §6) | Datos que administra | Almacenamiento | Patrón interno | Operaciones principales | Dependencias síncronas | Publica | Consume |
+|---|---|---|---|---|---|---|---|---|---|
+| **api-gateway** | Punto de entrada único. Autenticación JWT, identidad, rate limiting, routing, correlación, timeouts. | — | Ninguno de negocio. Contadores de rate limiting. | Redis | Pipeline de middlewares | Validar JWT, enrutar, limitar, propagar contexto | Todos los servicios (proxy) | — | — |
+| **members-service** | Identidad y habilitación: usuarios, login, roles, alumnos, profesionales, asignaciones y membresías. | Usuario, Alumno, Profesional, AsignaciónProfesionalAlumno, TipoMembresía, Membresía | Padrón de personas, credenciales (hash), roles, asignaciones, historial de membresías | PostgreSQL `members_db` | **Capas** (Handler → Service → Repository) | Login (emite JWT), ABM de alumnos/profesionales, asignar alumno, asignar/renovar/cancelar membresía, vencimiento diario, consulta interna de vigencia | — | `membresia.activada`; `membresia.cancelada`, `usuario.desactivado` | — |
+| **booking-service** | Oferta y uso del gimnasio: actividades, horarios, clases, reservas y asistencia. | Actividad, Horario, Clase, Reserva, Asistencia | Catálogo de actividades, agenda, cupos, reservas, asistencias | PostgreSQL `booking_db` (escritura, fuente de verdad) + OpenSearch (lectura) | **Hexagonal** + **CQRS de lectura** | Generar clases, consultar clases con ocupación, reservar, cancelar, registrar asistencia, regularizar SIN_REGISTRO, cancelar clase, cerrar ventanas de asistencia | `members-service` (membresía vigente; datos de alumnos para listados) | `asistencia.registrada`, `clase.actualizada` | `membresia.cancelada`, `usuario.desactivado` |
+| **booking-indexer** | Mantener el modelo de lectura de clases en OpenSearch. | Proyección `ClaseLectura` | Índice `clases` (derivado, reconstruible) | OpenSearch | Consumidor (parte del módulo booking) | Indexar/actualizar clase, reindexado completo | — (lee `booking_db` solo para reindexado completo, mismo servicio) | — | `clase.actualizada` |
+| **benefits-service** | Club de Beneficios y **capacidad publicada a otros grupos** (API v1 de puntos). | CuentaBeneficios, MovimientoPuntos, Beneficio, Canje, Partner, VinculaciónPartner, OperaciónPartner | Cuentas, ledger inmutable, catálogo, canjes, partners y API keys (hash), claves de idempotencia | PostgreSQL `benefits_db` | **Hexagonal** | Consultar saldo/movimientos, canjear, acreditar por asistencia, revertir, ABM de beneficios y partners, API partner (acreditar, debitar, canjear, consultar) | `members-service` solo para validar el alumno al vincularlo a un partner (operación de baja frecuencia) | — (ninguno en v1) | `asistencia.registrada` |
+| **training-service** | Seguimiento del alumno: entrenamiento y nutrición. | PlanEntrenamiento, DíaRutina, EjercicioPlanificado, PlanAlimenticio, Medición, ConsultaNutricional | Planes (documentos anidados), mediciones (append-only), consultas | MongoDB `training_db` | **Capas** | ABM de planes de entrenamiento, planes alimenticios, registrar mediciones, consultas nutricionales | `members-service` (¿el alumno está asignado a este profesional?) | — | — |
+| **notification-worker** | Enviar emails de confirmación de membresía. | NotificaciónEmail | Registro de mensajes procesados y estado de envío | MongoDB `notifications_db` | Consumidor | Consumir evento, enviar email, registrar resultado | SMTP (Mailpit en local) | — | `membresia.activada` |
+
+### 4.2 Detalle por servicio
+
+#### members-service — Capas
+
+- **Por qué capas:** lógica mayormente CRUD con reglas acotadas (solapamiento de membresías, unicidad de DNI/email). Una arquitectura hexagonal agregaría indirección sin beneficio.
+- **Reglas SPEC que implementa:** RN-01 a RN-06, RN-30 (parcial), RN-33, RN-34.
+- **API interna** (no expuesta por el gateway): `GET /internal/v1/alumnos/{id}/vigencia?fechas=2026-10-07,2026-10-09` → `{vigente_hoy, vigente_en: {fecha: bool}}`; `GET /internal/v1/alumnos?ids=…` (datos mínimos para listados); `GET /internal/v1/asignaciones?profesional_id=…&alumno_id=…`.
+- **Procesos programados:** vencimiento diario de membresías (00:00 America/Argentina/Buenos_Aires) y relay del outbox.
+- **JWT:** firma RS256 con clave privada propia; el gateway solo tiene la clave pública. Vida corta (15 min).
+
+#### booking-service — Hexagonal + CQRS de lectura
+
+- **Por qué hexagonal:** concentra las reglas más críticas del SPEC (RN-12 a RN-21, RN-38 a RN-40) y la concurrencia del cupo. El dominio puro permite probar las reglas sin infraestructura y cambiar adaptadores (Postgres, OpenSearch, cliente de members) sin tocarlas.
+- **Puertos de salida:** `ClaseRepository`, `ReservaRepository`, `AsistenciaRepository`, `MembresiaChecker` (HTTP → members), `AlumnoDirectory` (HTTP → members), `EventPublisher` (outbox), `ClaseReadModel` (OpenSearch), `Clock`.
+- **Puertos de entrada:** HTTP (Gin) y consumidor AMQP.
+- **CQRS de lectura:** las búsquedas de clases disponibles (`GET /clases?actividad=&fecha=`) se resuelven en OpenSearch; **toda escritura y toda validación** (cupo, duplicados, superposición) se hacen contra PostgreSQL. La ocupación mostrada en listados es eventualmente consistente; la reserva nunca lo es.
+- **Concurrencia del cupo (RN-14):** actualización condicional atómica sobre la clase (`ocupacion < capacidad`) o bloqueo de fila, en la misma transacción que inserta la reserva. Restricciones únicas parciales para "una reserva CONFIRMADA por alumno y clase". Detalle en ADR-003.
+- **2 instancias detrás de Traefik:** sin estado en memoria. Los procesos programados (pasar a SIN_REGISTRO, relay del outbox) se coordinan con `pg_advisory_lock` / `FOR UPDATE SKIP LOCKED` para no ejecutarse dos veces.
+- **Binarios:** `cmd/api` (HTTP + consumidor) y `cmd/indexer` (booking-indexer). Mismo módulo, mismo dominio de lectura.
+
+#### benefits-service — Hexagonal
+
+- **Por qué hexagonal:** es la capacidad publicada a otros grupos; su contrato (API v1) debe mantenerse estable aunque cambie la infraestructura, y el ledger tiene invariantes estrictas (RN-22 a RN-27).
+- **Ledger:** `movimientos_puntos` es append-only; el saldo se mantiene en `cuentas.saldo` actualizado en la misma transacción que inserta el movimiento, con `CHECK (saldo >= 0)`. La reversión inserta un movimiento compensatorio.
+- **Cuentas:** se crean **bajo demanda** (primera acreditación, primera consulta o vinculación) a partir del `alumno_id`. Esto cumple S-10 (todo alumno tiene cuenta) sin necesitar un evento `alumno.creado`. Una cuenta inexistente se informa con saldo 0.
+- **API v1 de partners:** `/partner-api/v1/...` con API key (`X-API-Key`, guardada como hash) e `Idempotency-Key` obligatorio en escrituras. Contrato publicado en `docs/api/benefits-partner-v1.yaml` (etapa siguiente).
+- **Idempotencia de asistencia:** restricción única sobre `movimientos_puntos.origen_asistencia_id` además del registro de mensajes procesados.
+
+#### training-service — Capas
+
+- **Por qué capas:** operaciones de alta y consulta de documentos con validaciones de formato; sin concurrencia crítica.
+- **Por qué MongoDB:** un plan de entrenamiento es un agregado jerárquico (plan → días → ejercicios) que se lee y escribe completo; las mediciones son append-only y se consultan por alumno y fecha. Ver ADR-003.
+- **Colecciones:** `planes_entrenamiento`, `planes_alimenticios`, `mediciones`, `consultas_nutricionales`.
+
+#### notification-worker
+
+- Consume `membresia.activada`, arma el email (tipo, inicio, vencimiento) con los datos que trae el evento (no consulta a members) y lo envía por SMTP.
+- Registra en `notifications_db.mensajes` cada `event_id` con estado `PROCESANDO → ENVIADO | FALLIDO`; índice único por `event_id`.
+- Expone `:8085` solo para `/health` y `/metrics`.
+
+---
+
+## 5. API Gateway
+
+### 5.1 Pipeline de middlewares (en orden)
+
+| # | Middleware | Comportamiento |
+|---|---|---|
+| 1 | Recovery + access log | Nunca cae por un pánico; log estructurado de cada request. |
+| 2 | Correlation ID | Toma `X-Correlation-Id` si viene y es un UUID válido; si no, genera uno. Lo propaga a los servicios y lo devuelve en la respuesta. |
+| 3 | Trazas OTel | Abre el span raíz y propaga `traceparent` (W3C). |
+| 4 | **Limpieza de identidad** | Borra **siempre** `X-User-Id`, `X-User-Role`, `X-Partner-Id` y cualquier `X-Internal-*` que mande el cliente. |
+| 5 | Autenticación | Rutas `/api/v1/**` (salvo login): valida JWT RS256 (firma, `exp`, `iss`, `aud`). Rutas `/partner-api/v1/**`: exige `X-API-Key` presente (la validación la hace benefits-service, dueño de los partners). |
+| 6 | Inyección de identidad | Desde el JWT: `X-User-Id` = `sub`, `X-User-Role` ∈ {`ADMINISTRADOR`, `PROFESOR`, `NUTRICIONISTA`, `ALUMNO`}. |
+| 7 | Rate limiting | Token bucket en Redis (script atómico). Clave por usuario (`sub`), por API key (hash) o por IP (login). Excedido → `429` con `Retry-After` y problema RFC 7807. |
+| 8 | Routing semántico | Por prefijo de recurso (ver 5.2). Rutas `/internal/**` → `404` (nunca se exponen). |
+| 9 | Timeout por ruta | `context.WithTimeout` por ruta; vencido → `504` RFC 7807. |
+
+### 5.2 Tabla de routing (inicial)
+
+| Prefijo público | Destino | Timeout | Rate limit inicial |
+|---|---|---|---|
+| `POST /api/v1/auth/login` | members-service | 3 s | 5 req/min por IP |
+| `/api/v1/usuarios`, `/alumnos`, `/profesionales`, `/asignaciones`, `/tipos-membresia`, `/membresias` | members-service | 3 s | 10 req/s, ráfaga 20, por usuario |
+| `/api/v1/actividades`, `/horarios`, `/clases`, `/reservas`, `/asistencias` | Traefik → booking-service | 3 s lectura / 5 s escritura | 10 req/s, ráfaga 20, por usuario |
+| `/api/v1/cuenta`, `/movimientos`, `/beneficios`, `/canjes`, `/partners` | benefits-service | 3 s / 5 s | 10 req/s, ráfaga 20, por usuario |
+| `/api/v1/planes-entrenamiento`, `/planes-alimenticios`, `/mediciones`, `/consultas` | training-service | 3 s | 10 req/s, ráfaga 20, por usuario |
+| `/partner-api/v1/**` | benefits-service | 5 s | 20 req/s, ráfaga 40, por API key |
+
+Los valores son iniciales; se ajustan con las pruebas de carga (k6).
+
+### 5.3 Comportamiento ante fallas de Redis
+
+El rate limiting **falla abierto** (deja pasar y registra métrica `ratelimit_redis_errors_total`): preferimos disponibilidad del gimnasio a protección estricta ante una caída de Redis. Login es la excepción: **falla cerrado** (protección contra fuerza bruta).
+
+---
+
+## 6. Comunicaciones síncronas y asíncronas
+
+### 6.1 Síncronas (HTTP/JSON)
+
+| Origen | Destino | Operación | Motivo de ser síncrona | Timeout | Reintentos | Si falla |
+|---|---|---|---|---|---|---|
+| web | api-gateway | Toda la API pública | Interacción de usuario | Según §5.2 | No (el cliente reintenta con la misma `Idempotency-Key`) | Error RFC 7807 |
+| Partner | api-gateway → benefits | API v1 de puntos | Contrato público request/response | 5 s | El partner, con la misma `Idempotency-Key` | RFC 7807 |
+| api-gateway | Servicios | Proxy | — | Según ruta | No (no conoce idempotencia de cada operación) | `502`/`504` RFC 7807 |
+| booking | members | Membresía vigente hoy y en la fecha de la clase (RN-12 b) | La reserva **no puede** confirmarse sin la respuesta | 800 ms | 1 reintento (GET idempotente) con backoff 100 ms + circuit breaker | **Falla cerrado:** `503 MEMBERS_NO_DISPONIBLE`; no se reserva |
+| booking | members | Datos mínimos de alumnos para listados del profesor | Composición de vistas | 800 ms | 1 | Se devuelve el listado con IDs sin nombre (degradación) |
+| training | members | ¿Alumno asignado al profesional? (RN-30) | Autorización | 800 ms | 1 + caché Redis 60 s | Falla cerrado: `503` |
+| benefits | members | Validar alumno al vincularlo a un partner | Validación de alta | 800 ms | 1 | `503`; el admin reintenta |
+| notification-worker | SMTP | Envío de email | Protocolo SMTP | 10 s | Vía colas de reintento | Reintento → DLQ |
+
+### 6.2 Asíncronas (RabbitMQ, exchange `gym.events`)
+
+| Evento | Productor | Consumidor(es) | Efecto en el consumidor | Reglas SPEC |
+|---|---|---|---|---|
+| `membresia.activada` | members-service | notification-worker | Enviar email de confirmación (asignación o renovación) | RN-05 |
+| `asistencia.registrada` | booking-service | benefits-service | Si `resultado = ASISTIO`, acreditar puntos exactamente una vez | RN-20, RN-21 |
+| `clase.actualizada` | booking-service | booking-indexer | Upsert del documento de la clase en OpenSearch (ignora versiones viejas) | CQRS |
+| `membresia.cancelada` | members-service | booking-service | Cancelar reservas futuras no cubiertas por otra membresía vigente | RN-04 |
+| `usuario.desactivado` | members-service | booking-service | Cancelar reservas futuras del alumno dado de baja | RN-34 |
+
+---
+
+## 7. Catálogo inicial de eventos
+
+### 7.1 Sobre común (envelope)
+
+Todos los eventos viajan con la misma envoltura JSON. La routing key es el nombre del evento.
+
+| Campo | Tipo | Descripción |
+|---|---|---|
+| `event_id` | UUID | Identificador único; clave de idempotencia del consumidor |
+| `event_type` | string | Nombre, ej. `asistencia.registrada` |
+| `event_version` | int | Versión del esquema de `data` (empieza en 1) |
+| `occurred_at` | RFC 3339 UTC | Momento del hecho de negocio |
+| `producer` | string | Servicio productor, ej. `booking-service` |
+| `correlation_id` | string | Correlation ID de la request que originó el hecho |
+| `traceparent` | string | Contexto W3C para continuar la traza |
+| `data` | objeto | Contenido específico del evento |
+
+**Reglas de versionado:** agregar campos opcionales no cambia la versión. Quitar, renombrar o cambiar el tipo de un campo exige `event_version + 1` y publicar ambas versiones mientras haya consumidores de la anterior. Los consumidores ignoran campos desconocidos.
+
+### 7.2 Eventos
+
+| Evento | Versión | Productor | Consumidores | Campos de `data` |
+|---|---|---|---|---|
+| `membresia.activada` | 1 | members-service | notification-worker | `membresia_id`, `alumno_id`, `alumno_nombre`, `alumno_email`, `tipo_membresia`, `fecha_inicio` (fecha), `fecha_vencimiento` (fecha), `operacion` (`ASIGNACION` \| `RENOVACION`), `membresia_anterior_id` (nullable) |
+| `asistencia.registrada` | 1 | booking-service | benefits-service | `asistencia_id`, `reserva_id`, `clase_id`, `alumno_id`, `actividad_id`, `actividad_nombre`, `clase_inicio` (RFC 3339), `resultado` (`ASISTIO` \| `AUSENTE`), `puntos` (int, valor de la actividad al registrar), `registrada_por`, `regularizacion` (bool, RN-38), `registrada_en` |
+| `clase.actualizada` | 1 | booking-service | booking-indexer | `clase_id`, `version` (int creciente por clase), `actividad_id`, `actividad_nombre`, `fecha`, `inicio`, `fin`, `franja` (nullable, solo Musculación), `profesor_id`, `profesor_nombre`, `capacidad`, `ocupacion`, `estado` (`PROGRAMADA` \| `EN_CURSO` \| `FINALIZADA` \| `CANCELADA`) |
+| `membresia.cancelada` | 1 | members-service | booking-service | `membresia_id`, `alumno_id`, `fecha_inicio`, `fecha_vencimiento`, `motivo`, `cancelada_en` |
+| `usuario.desactivado` | 1 | members-service | booking-service | `usuario_id`, `rol`, `desactivado_en` |
+
+Notas:
+- `membresia.activada` lleva nombre y email (**event-carried state transfer**) para que el worker no dependa de members-service. Es dato personal: el worker no lo registra en logs.
+- `asistencia.registrada` se publica también con `AUSENTE` (útil para futuros consumidores); benefits lo ignora.
+- `clase.actualizada` se publica en **cada** cambio que afecte la vista: alta, cambio de capacidad/responsable, cancelación, y cada reserva o cancelación (cambia `ocupacion`). El campo `version` permite descartar mensajes fuera de orden.
+- Los esquemas JSON formales vivirán en `docs/events/` (etapa siguiente).
+
+---
+
+## 8. Mensajería: topología, outbox e idempotencia
+
+### 8.1 Topología RabbitMQ
+
+| Elemento | Nombre | Tipo / binding |
+|---|---|---|
+| Exchange principal | `gym.events` | topic, durable |
+| Exchange de reintentos | `gym.retry` | direct, durable |
+| Exchange de DLQ | `gym.dlx` | direct, durable |
+| Cola por consumidor | `<consumidor>.<evento>` ej. `benefits.asistencia-registrada` | durable, quorum; binding `asistencia.registrada` |
+| Colas de reintento | `<cola>.retry.10s`, `<cola>.retry.1m`, `<cola>.retry.10m` | TTL fijo + dead-letter de vuelta a `gym.events` con la routing key original |
+| DLQ | `<cola>.dlq` | durable; revisión manual y re-publicación con herramienta del Makefile |
+
+Colas iniciales: `notification.membresia-activada`, `benefits.asistencia-registrada`, `booking-indexer.clase-actualizada` y, si se aprueban, `booking.membresia-cancelada`, `booking.usuario-desactivado`.
+
+**Política de reintento:** error transitorio → se publica a la cola de reintento correspondiente al número de intento (header `x-attempt`), luego ACK del original. Tras 4 intentos fallidos o ante un error permanente (mensaje inválido, versión desconocida) → DLQ.
+
+### 8.2 Transactional Outbox
+
+1. El caso de uso escribe el cambio de negocio **y** una fila en `outbox` (mismo esquema, misma transacción).
+2. Un **relay de polling** (goroutine dentro del servicio) lee cada 500 ms hasta 100 filas pendientes con `FOR UPDATE SKIP LOCKED`, publica con **publisher confirms** y marca `published_at`.
+3. Con 2 instancias de booking, `SKIP LOCKED` evita que ambas publiquen la misma fila al mismo tiempo; aun así la entrega es **al menos una vez**.
+4. Filas publicadas se purgan pasados 7 días.
+
+Servicios con outbox: `members-service`, `booking-service`. (benefits y training no publican en v1.)
+
+### 8.3 Consumidores idempotentes
+
+- Cada consumidor registra el `event_id` procesado **en la misma transacción que el efecto** (tabla `processed_messages` en Postgres; colección con índice único en Mongo).
+- Además, restricciones de negocio actúan como segunda barrera (ej. único `origen_asistencia_id` en el ledger).
+- **ACK después del efecto.** Si el proceso muere antes del ACK, el mensaje se reentrega y se descarta por duplicado.
+- `prefetch` acotado (10) para no acaparar mensajes.
+
+### 8.4 Idempotencia de requests HTTP
+
+| Ámbito | Header | Obligatoria | Retención | Dónde se guarda |
+|---|---|---|---|---|
+| Frontend: reservar, cancelar, canjear, registrar asistencia | `Idempotency-Key` | Recomendada (la envía el frontend siempre) | 24 h | Tabla `idempotency_keys` del servicio dueño |
+| Partners: acreditar, debitar, canjear | `Idempotency-Key` | **Obligatoria** | ≥ 30 días (RN-27) | `operaciones_partner` en `benefits_db` |
+
+Misma clave + mismo hash de request → misma respuesta guardada. Misma clave + otro hash → `409 CONFLICTO_IDEMPOTENCIA`. Request en curso con la misma clave → `409 OPERACION_EN_CURSO` (reintentable).
+
+---
+
+## 9. Datos, caché y búsqueda
+
+| Almacén | Bases / índices | Dueño | Uso |
+|---|---|---|---|
+| PostgreSQL 16 (1 instancia local) | `members_db`, `booking_db`, `benefits_db` | Un usuario de base por servicio, con permisos **solo** sobre su base | Fuente de verdad transaccional |
+| MongoDB 7 | `training_db`, `notifications_db` | training-service / notification-worker | Documentos jerárquicos y registros de procesamiento |
+| Redis 7 | Prefijos por servicio: `gw:rl:*`, `members:*`, `booking:*`, `benefits:*` | Cada servicio solo usa su prefijo | Rate limiting y cache-aside |
+| OpenSearch 2 | Índice `clases` (alias `clases-read`) | booking-service | Modelo de lectura de clases disponibles |
+
+**Cache-aside inicial:**
+
+| Clave | Servicio | TTL | Invalidación |
+|---|---|---|---|
+| Catálogo de actividades | booking | 10 min | Al modificar una actividad |
+| Catálogo de beneficios | benefits | 5 min | Al modificar un beneficio |
+| Tipos de membresía | members | 1 h | Al modificar un tipo |
+| Asignaciones profesional–alumno | training | 60 s | Solo TTL |
+
+**No se cachea** la vigencia de membresía al reservar: es una validación de negocio (RN-12) y un valor viejo podría permitir reservar con una membresía recién cancelada.
+
+Detalle y justificación en [ADR-003](adr/ADR-003-persistencia.md).
+
+---
+
+## 10. Seguridad
+
+| Tema | Decisión |
+|---|---|
+| Autenticación de usuarios | Login en members-service; JWT RS256 (15 min) con `sub`, `role`, `iss=gym-members`, `aud=gym-api`. Sin refresh token en v1 (el usuario vuelve a loguearse). |
+| Autorización | Gruesa en el gateway (rol por ruta) y **fina en cada servicio** (ej. "solo el profesor responsable", "solo su propia reserva"). |
+| Confianza interna | Los servicios aceptan `X-User-Id`/`X-User-Role` porque **solo** son alcanzables desde la red interna de Docker; sus puertos no se publican en el host salvo en modo desarrollo. |
+| Partners | API key por partner (se muestra una sola vez, se guarda hash SHA-256), validada por benefits-service. Rate limit por key. |
+| Contraseñas | Hash con bcrypt (costo ≥ 12). |
+| Secretos | Variables de entorno; `.env.example` versionado, `.env` nunca. |
+| Datos personales | No se loguean emails, DNI, tokens ni API keys. |
+
+---
+
+## 11. Observabilidad
+
+| Señal | Instrumentación | Pipeline | Visualización |
+|---|---|---|---|
+| Trazas | OTel SDK Go (`otelgin`, `otelhttp`, instrumentación manual en publicación/consumo AMQP y SQL) | OTLP → OTel Collector → Jaeger | Jaeger UI y Grafana |
+| Métricas | OTel SDK (RED por endpoint, latencia de dependencias, tamaño de outbox pendiente, mensajes en DLQ, reintentos) | OTLP → Collector → Prometheus | Grafana |
+| Logs | `log/slog` en JSON a stdout con `trace_id`, `span_id`, `correlation_id` | Collector (filelog / Docker) → Loki | Grafana (enlace log ↔ traza) |
+
+La traza atraviesa la frontera asíncrona: el productor guarda `traceparent` en el outbox y el consumidor continúa la traza desde el envelope.
+
+**Dashboards iniciales:** salud por servicio (RED), reservas (aceptadas/rechazadas por motivo), outbox (pendientes, antigüedad), mensajería (lag por cola, DLQ), API de partners (requests, 4xx/5xx, idempotencia).
+
+---
+
+## 12. Convenciones transversales
+
+### 12.1 Errores — RFC 7807 (`application/problem+json`)
+
+```json
+{
+  "type": "https://gym.local/problems/sin-cupo",
+  "title": "Sin cupo",
+  "status": 409,
+  "detail": "La clase 3f1c… no tiene lugares disponibles.",
+  "instance": "/api/v1/reservas",
+  "code": "SIN_CUPO",
+  "correlation_id": "6b1e…"
+}
+```
+
+| `code` | HTTP | Regla SPEC |
+|---|---|---|
+| `VALIDACION` | 400 | §9 |
+| `NO_AUTENTICADO` / `SIN_PERMISO` | 401 / 403 | RN-30 |
+| `NO_ENCONTRADO` / `CUENTA_NO_ENCONTRADA` | 404 | RN-26 |
+| `MEMBRESIA_NO_VIGENTE` | 422 | RN-12 |
+| `CLASE_NO_FUTURA` / `CLASE_CANCELADA` | 422 | RN-12 |
+| `SIN_CUPO` | 409 | RN-14 |
+| `RESERVA_DUPLICADA` | 409 | RN-13 |
+| `TURNO_MUSCULACION_DIARIO` | 409 | RN-39 |
+| `SUPERPOSICION_RESERVA` | 409 | RN-40 |
+| `PLAZO_CANCELACION_VENCIDO` | 422 | RN-17 |
+| `VENTANA_ASISTENCIA_CERRADA` | 422 | RN-19 |
+| `ASISTENCIA_YA_REGISTRADA` | 409 | RN-21 |
+| `TRANSICION_INVALIDA` | 409 | §7 |
+| `SOLAPAMIENTO_MEMBRESIA` | 409 | RN-02 |
+| `SALDO_INSUFICIENTE` | 422 | RN-23 |
+| `BENEFICIO_NO_DISPONIBLE` | 422 | RN-24 |
+| `CONFLICTO_IDEMPOTENCIA` / `OPERACION_EN_CURSO` | 409 | RN-15, RN-27 |
+| `LIMITE_EXCEDIDO` | 429 | Gateway |
+| `DEPENDENCIA_NO_DISPONIBLE` | 503 | §6.1 |
+| `TIMEOUT` | 504 | Gateway |
+
+### 12.2 Nombres
+
+| Elemento | Convención | Ejemplo |
+|---|---|---|
+| Términos de dominio | Español, según el glosario del SPEC, sin tildes en identificadores | `Reserva`, `Membresia`, `CuentaBeneficios` |
+| Términos técnicos | Inglés | `Repository`, `Handler`, `Publisher` |
+| Endpoints | `/api/v1/<recurso-plural>` en kebab-case español | `/api/v1/planes-entrenamiento` |
+| JSON | snake_case | `fecha_vencimiento` |
+| Eventos | `<entidad>.<participio>` en minúscula | `asistencia.registrada` |
+| Tablas / colecciones | snake_case plural | `movimientos_puntos` |
+| Variables de entorno | `UPPER_SNAKE`, prefijo del servicio | `BOOKING_DB_DSN` |
+| Fechas y horas | RFC 3339 en UTC en APIs/eventos; reglas de negocio evaluadas en America/Argentina/Buenos_Aires | `2026-10-07T22:00:00Z` |
+
+### 12.3 Endpoints comunes de todo servicio
+
+`GET /health/live`, `GET /health/ready` (verifica sus dependencias propias), `GET /metrics` (si no se exporta por OTLP).
+
+---
+
+## 13. Estructura del monorepo
+
+```text
+/
+├── SPEC.md                         # Especificación funcional (fuente de verdad del negocio)
+├── README.md
+├── CONTRIBUTING.md
+├── CLAUDE.md
+├── Makefile                        # make up | down | test | lint | logs | load-test …
+├── go.work                         # Workspace Go: un módulo por servicio + pkg
+├── .github/
+│   └── workflows/                  # CI: lint, test, build de imágenes
+├── gateway/                        # api-gateway (módulo Go propio)
+│   ├── cmd/gateway/
+│   ├── internal/{middleware,proxy,routes,config}/
+│   └── Dockerfile
+├── services/
+│   ├── members-service/            # CAPAS
+│   │   ├── cmd/api/
+│   │   ├── internal/{handler,service,repository,model,config}/
+│   │   ├── migrations/
+│   │   └── Dockerfile
+│   ├── booking-service/            # HEXAGONAL + CQRS
+│   │   ├── cmd/{api,indexer}/
+│   │   ├── internal/
+│   │   │   ├── domain/             # entidades, value objects, reglas, errores (sin imports de infra)
+│   │   │   ├── application/        # casos de uso + puertos (interfaces in/out)
+│   │   │   └── adapters/
+│   │   │       ├── in/{http,amqp}/
+│   │   │       └── out/{postgres,opensearch,members,outbox}/
+│   │   ├── migrations/
+│   │   └── Dockerfile
+│   ├── benefits-service/           # HEXAGONAL (misma forma que booking, sin indexer)
+│   ├── training-service/           # CAPAS (repository sobre MongoDB)
+│   └── notification-worker/
+│       ├── cmd/worker/
+│       └── internal/{consumer,mailer,store}/
+├── pkg/                            # Librerías técnicas compartidas (NUNCA lógica de dominio)
+│   ├── problem/                    # RFC 7807
+│   ├── observability/              # setup OTel, slog
+│   ├── events/                     # envelope, publisher, consumer base, reintentos
+│   ├── outbox/                     # tabla + relay
+│   ├── idempotency/
+│   └── httpclient/                 # timeouts, reintentos, circuit breaker, propagación
+├── web/                            # React + Vite + TypeScript
+├── deploy/
+│   ├── compose/                    # docker-compose.yml, .env.example
+│   ├── postgres/                   # init: bases y usuarios por servicio
+│   ├── rabbitmq/                   # definitions.json (exchanges, colas, bindings)
+│   ├── traefik/
+│   ├── opensearch/                 # mappings del índice clases
+│   └── observability/              # otel-collector, prometheus, loki, grafana (dashboards)
+├── docs/
+│   ├── ARCHITECTURE.md
+│   ├── adr/
+│   ├── api/                        # OpenAPI por servicio + API v1 de partners
+│   └── events/                     # JSON Schema de cada evento
+└── tests/
+    ├── load/                       # scripts k6
+    └── e2e/                        # flujos E2E del SPEC §11 contra el stack levantado
+```
+
+**Módulos Go:** un `go.mod` por servicio, por `gateway/` y por `pkg/`, unidos con `go.work`. Así cada imagen compila solo lo suyo y un servicio no puede importar `internal/` de otro.
+
+---
+
+## 14. Distribución de componentes
+
+### 14.1 Local (Docker Compose, `make up`)
+
+| Contenedor | Imagen / build | Puerto host | Réplicas |
+|---|---|---|---|
+| `web` | build `web/` (Vite dev server) | 5173 | 1 |
+| `api-gateway` | build `gateway/` | 8080 | 1 |
+| `members-service` | build | 8081 (solo dev) | 1 |
+| `traefik` | traefik v3 | 8090 (dashboard, dev) | 1 |
+| `booking-service` | build | 8082 (solo dev, vía Traefik) | **2** |
+| `booking-indexer` | build (mismo módulo) | — | 1 |
+| `benefits-service` | build | 8083 (solo dev) | 1 |
+| `training-service` | build | 8084 (solo dev) | 1 |
+| `notification-worker` | build | 8085 (health/metrics) | 1 |
+| `postgres` | postgres:16 | 5432 | 1 (3 bases) |
+| `mongo` | mongo:7 (replica set de 1 nodo) | 27017 | 1 |
+| `redis` | redis:7 | 6379 | 1 |
+| `rabbitmq` | rabbitmq:3-management | 5672 / 15672 | 1 |
+| `opensearch` (+ dashboards opcional) | opensearch 2.x | 9200 | 1 |
+| `mailpit` | axllent/mailpit | 1025 / 8025 | 1 |
+| `otel-collector`, `jaeger`, `prometheus`, `loki`, `grafana` | oficiales | 4317 / 16686 / 9090 / 3100 / 3000 | 1 c/u |
+
+Requisito estimado: ~8 GB de RAM libres para el stack completo (OpenSearch y la observabilidad son lo más pesado). El Makefile ofrecerá `make up-core` (sin observabilidad ni OpenSearch dashboards) para máquinas justas.
+
+### 14.2 Nube
+
+El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**.
+
+**Decisión:** se despliega **el stack completo en una VM con Docker Compose**, igual que en local, con perfil `prod`: el frontend se sirve como estáticos (sin el servidor de desarrollo de Vite) y Traefik actúa además como borde HTTPS. El **proveedor de nube no está elegido**; se definirá en un ADR posterior.
+
+| Aspecto | Detalle |
+|---|---|
+| Qué se expone a Internet | Solo el gateway (HTTPS): `/api/v1/**` para el frontend y `/partner-api/v1/**` para los partners |
+| Qué queda privado | Servicios, bases, broker, Redis, OpenSearch y la observabilidad (acceso por túnel SSH) |
+| Por qué | Paridad total con local, costo bajo y operación simple para un TP; las acreditaciones por asistencia funcionan porque booking también está desplegado |
+| Alternativa descartada | Desplegar solo gateway + benefits: alcanza para los partners, pero los puntos por asistencia nunca llegarían |
+
+---
+
+## 15. Limitaciones conocidas y deuda técnica
+
+| # | Limitación | Impacto | Mitigación prevista |
+|---|---|---|---|
+| L-01 | **Una sola instancia de PostgreSQL** para tres bases. | Punto único de falla y recursos compartidos; aislamiento lógico, no físico. | Usuarios y permisos por base; ninguna consulta cruzada. Separar instancias es cambiar DSN. |
+| L-02 | **Dependencia síncrona booking → members** para reservar. | Si members cae, no se puede reservar (falla cerrado). | Timeout corto, circuit breaker, health checks; alternativa futura: réplica local de vigencias vía eventos. |
+| L-03 | **Ocupación eventualmente consistente** en los listados (OpenSearch). | Un listado puede mostrar "1 disponible" cuando ya no hay. | La reserva valida contra Postgres y devuelve `SIN_CUPO`; lag objetivo < 2 s. |
+| L-04 | **Puntos por asistencia con demora** (asincrónicos). | El alumno puede no ver los puntos inmediatamente. | Lag objetivo < 5 s; reintentos + DLQ monitoreada. |
+| L-05 | **Email al menos una vez.** SMTP no es transaccional: si el worker muere entre enviar y registrar, el email puede duplicarse. | Contradice parcialmente "sin duplicados" (RN-05) en un escenario de falla raro. | Estado `PROCESANDO` antes de enviar; ventana mínima. Riesgo aceptado. |
+| L-06 | **Gateway, Redis, RabbitMQ y OpenSearch en instancia única.** | Puntos únicos de falla. | Aceptado para el alcance del TP; booking es el único servicio replicado para demostrar balanceo. |
+| L-07 | **JWT sin revocación.** Un usuario dado de baja conserva acceso hasta que vence el token. | Hasta 15 min de acceso residual. | Vida corta; los servicios verifican estado ACTIVO en operaciones sensibles. |
+| L-08 | **Confianza por red interna** (sin mTLS entre servicios). | Quien entre a la red interna puede falsificar identidad. | Puertos internos no publicados fuera de dev. |
+| L-09 | **Outbox por polling.** | Latencia de hasta ~500 ms y carga constante sobre Postgres. | Índice parcial sobre pendientes; CDC queda como mejora futura. |
+| L-10 | **Sin orden garantizado** de eventos con 2 instancias de booking. | Un `clase.actualizada` viejo podría llegar tarde. | Campo `version` por clase; el indexer descarta versiones menores. |
+| L-11 | **Procesos programados en servicios replicados** (SIN_REGISTRO, vencimientos). | Doble ejecución. | `pg_advisory_lock` por job. |
+| L-12 | **Sin registro de esquemas** de eventos. | Rupturas de contrato detectadas tarde. | JSON Schema en `docs/events/` + tests de contrato en CI. |
+| L-13 | **Más dependencias síncronas hacia members** (asignaciones desde training, datos de alumnos desde booking), agregadas para cumplir RN-30 y HU-21. | members concentra más tráfico y su caída degrada training y los listados. | Caché de 60 s en training; listados degradan a IDs sin nombre. |
+| L-14 | **Stack local pesado** (~8 GB). | Máquinas modestas pueden no levantarlo completo. | Perfil `make up-core`. |
+
+---
+
+## 16. Índice de ADR
+
+| ADR | Tema | Estado |
+|---|---|---|
+| [ADR-000](adr/ADR-000-plantilla.md) | Plantilla | — |
+| [ADR-001](adr/ADR-001-limites-de-servicios.md) | D1 — Límites de servicios | Aceptado |
+| ADR-002 | D2 — *reservado* | — |
+| [ADR-003](adr/ADR-003-persistencia.md) | D3 — Persistencia por servicio (versión inicial) | Aceptado |
+| ADR-004 | D4 — *reservado* | — |
+| [ADR-005](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona (versión inicial) | Aceptado |
