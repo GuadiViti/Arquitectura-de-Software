@@ -1,4 +1,4 @@
-# SPEC — Sistema Integral de Gestión de Gimnasio
+# SPEC — METALFITNESS
 
 > Especificación funcional del Trabajo Práctico Integrador de Arquitectura de Software (microservicios).
 > Este documento es la **referencia funcional** durante todo el desarrollo. No define tecnologías, lenguajes, frameworks ni modelos de base de datos.

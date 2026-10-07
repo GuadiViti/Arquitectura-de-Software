@@ -1,4 +1,4 @@
-# Arquitectura — Sistema Integral de Gestión de Gimnasio
+# Arquitectura — METALFITNESS
 
 > Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
 >
@@ -66,7 +66,7 @@ flowchart TB
     alumno["👤 Alumno<br/><i>Reserva clases, consulta planes,<br/>membresía y Club de Beneficios</i>"]
     partner["🖥️ Partner externo<br/><i>Sistema de otro grupo que usa<br/>la API pública de puntos</i>"]
 
-    gym["<b>Sistema de Gestión de Gimnasio</b><br/><i>Membresías, clases y reservas, asistencia,<br/>entrenamiento, nutrición y Club de Beneficios</i>"]
+    gym["<b>METALFITNESS</b><br/><i>Membresías, clases y reservas, asistencia,<br/>entrenamiento, nutrición y Club de Beneficios</i>"]
 
     smtp["📧 Servidor de email (SMTP)<br/><i>Mailpit en local</i>"]
 
@@ -147,6 +147,7 @@ flowchart LR
 
     members -->|"outbox relay → publica"| mq
     booking1 & booking2 -->|"outbox relay → publica"| mq
+    mq -->|"alumno.creado"| benefits
     mq -->|"membresia.activada"| notif
     mq -->|"asistencia.registrada"| benefits
     mq -->|"clase.actualizada"| indexer
@@ -166,10 +167,10 @@ flowchart LR
 | Servicio | Responsabilidad | Entidades (SPEC §6) | Datos que administra | Almacenamiento | Patrón interno | Operaciones principales | Dependencias síncronas | Publica | Consume |
 |---|---|---|---|---|---|---|---|---|---|
 | **api-gateway** | Punto de entrada único. Autenticación JWT, identidad, rate limiting, routing, correlación, timeouts. | — | Ninguno de negocio. Contadores de rate limiting. | Redis | Pipeline de middlewares | Validar JWT, enrutar, limitar, propagar contexto | Todos los servicios (proxy) | — | — |
-| **members-service** | Identidad y habilitación: usuarios, login, roles, alumnos, profesionales, asignaciones y membresías. | Usuario, Alumno, Profesional, AsignaciónProfesionalAlumno, TipoMembresía, Membresía | Padrón de personas, credenciales (hash), roles, asignaciones, historial de membresías | PostgreSQL `members_db` | **Capas** (Handler → Service → Repository) | Login (emite JWT), ABM de alumnos/profesionales, asignar alumno, asignar/renovar/cancelar membresía, vencimiento diario, consulta interna de vigencia | — | `membresia.activada`; `membresia.cancelada`, `usuario.desactivado` | — |
+| **members-service** | Identidad y habilitación: usuarios, login, roles, alumnos, profesionales, asignaciones y membresías. | Usuario, Alumno, Profesional, AsignaciónProfesionalAlumno, TipoMembresía, Membresía | Padrón de personas, credenciales (hash), roles, asignaciones, historial de membresías | PostgreSQL `members_db` | **Capas** (Handler → Service → Repository) | Login (emite JWT), ABM de alumnos/profesionales, asignar alumno, asignar/renovar/cancelar membresía, vencimiento diario, consulta interna de vigencia | — | `alumno.creado`, `membresia.activada`; `membresia.cancelada`, `usuario.desactivado` | — |
 | **booking-service** | Oferta y uso del gimnasio: actividades, horarios, clases, reservas y asistencia. | Actividad, Horario, Clase, Reserva, Asistencia | Catálogo de actividades, agenda, cupos, reservas, asistencias | PostgreSQL `booking_db` (escritura, fuente de verdad) + OpenSearch (lectura) | **Hexagonal** + **CQRS de lectura** | Generar clases, consultar clases con ocupación, reservar, cancelar, registrar asistencia, regularizar SIN_REGISTRO, cancelar clase, cerrar ventanas de asistencia | `members-service` (membresía vigente; datos de alumnos para listados) | `asistencia.registrada`, `clase.actualizada` | `membresia.cancelada`, `usuario.desactivado` |
 | **booking-indexer** | Mantener el modelo de lectura de clases en OpenSearch. | Proyección `ClaseLectura` | Índice `clases` (derivado, reconstruible) | OpenSearch | Consumidor (parte del módulo booking) | Indexar/actualizar clase, reindexado completo | — (lee `booking_db` solo para reindexado completo, mismo servicio) | — | `clase.actualizada` |
-| **benefits-service** | Club de Beneficios y **capacidad publicada a otros grupos** (API v1 de puntos). | CuentaBeneficios, MovimientoPuntos, Beneficio, Canje, Partner, VinculaciónPartner, OperaciónPartner | Cuentas, ledger inmutable, catálogo, canjes, partners y API keys (hash), claves de idempotencia | PostgreSQL `benefits_db` | **Hexagonal** | Consultar saldo/movimientos, canjear, acreditar por asistencia, revertir, ABM de beneficios y partners, API partner (acreditar, debitar, canjear, consultar) | `members-service` solo para validar el alumno al vincularlo a un partner (operación de baja frecuencia) | — (ninguno en v1) | `asistencia.registrada` |
+| **benefits-service** | Club de Beneficios y **capacidad publicada a otros grupos** (API v1 de puntos). | CuentaBeneficios, MovimientoPuntos, Beneficio, Canje, Partner, VinculaciónPartner, OperaciónPartner | Cuentas, ledger inmutable, catálogo, canjes, partners y API keys (hash), claves de idempotencia | PostgreSQL `benefits_db` | **Hexagonal** | Consultar saldo/movimientos, canjear, acreditar por asistencia, revertir, ABM de beneficios y partners, API partner (acreditar, debitar, canjear, consultar) | `members-service` solo para validar el alumno al vincularlo a un partner (operación de baja frecuencia) | — (ninguno en v1) | `alumno.creado`, `asistencia.registrada` |
 | **training-service** | Seguimiento del alumno: entrenamiento y nutrición. | PlanEntrenamiento, DíaRutina, EjercicioPlanificado, PlanAlimenticio, Medición, ConsultaNutricional | Planes (documentos anidados), mediciones (append-only), consultas | MongoDB `training_db` | **Capas** | ABM de planes de entrenamiento, planes alimenticios, registrar mediciones, consultas nutricionales | `members-service` (¿el alumno está asignado a este profesional?) | — | — |
 | **notification-worker** | Enviar emails de confirmación de membresía. | NotificaciónEmail | Registro de mensajes procesados y estado de envío | MongoDB `notifications_db` | Consumidor | Consumir evento, enviar email, registrar resultado | SMTP (Mailpit en local) | — | `membresia.activada` |
 
@@ -197,7 +198,7 @@ flowchart LR
 
 - **Por qué hexagonal:** es la capacidad publicada a otros grupos; su contrato (API v1) debe mantenerse estable aunque cambie la infraestructura, y el ledger tiene invariantes estrictas (RN-22 a RN-27).
 - **Ledger:** `movimientos_puntos` es append-only; el saldo se mantiene en `cuentas.saldo` actualizado en la misma transacción que inserta el movimiento, con `CHECK (saldo >= 0)`. La reversión inserta un movimiento compensatorio.
-- **Cuentas:** se crean **bajo demanda** (primera acreditación, primera consulta o vinculación) a partir del `alumno_id`. Esto cumple S-10 (todo alumno tiene cuenta) sin necesitar un evento `alumno.creado`. Una cuenta inexistente se informa con saldo 0.
+- **Cuentas:** se crea exactamente una cuenta con saldo 0 cuando `members-service` confirma el alta del alumno. `members-service` publica `alumno.creado` mediante outbox y `benefits-service` consume el evento de forma idempotente. No se crean cuentas para personas que no sean alumnos; una vinculación o una operación posterior nunca crea una cuenta por sí sola.
 - **API v1 de partners:** `/partner-api/v1/...` con API key (`X-API-Key`, guardada como hash) e `Idempotency-Key` obligatorio en escrituras. Contrato publicado: [docs/contracts/benefits-api.v1.yaml](contracts/benefits-api.v1.yaml) (OpenAPI 3.1, v1.0.0), guía para consumidores en [docs/contracts/README.md](contracts/README.md) y decisión en [ADR-008](adr/ADR-008-contrato-propio.md). Las rutas públicas son `/partner-api/v1/accounts/{externalUserId}/...` y usan inglés y `camelCase` (excepción a §12.2).
 - **Idempotencia de asistencia:** restricción única sobre `movimientos_puntos.origen_asistencia_id` además del registro de mensajes procesados.
 
@@ -278,6 +279,7 @@ El rate limiting **falla abierto** (deja pasar y registra métrica `ratelimit_re
 
 | Evento | Productor | Consumidor(es) | Efecto en el consumidor | Reglas SPEC |
 |---|---|---|---|---|
+| `alumno.creado` | members-service | benefits-service | Crear la cuenta de beneficios del alumno con saldo 0 | S-10, HU-01 |
 | `membresia.activada` | members-service | notification-worker | Enviar email de confirmación (asignación o renovación) | RN-05 |
 | `asistencia.registrada` | booking-service | benefits-service | Si `resultado = ASISTIO`, acreditar puntos exactamente una vez | RN-20, RN-21 |
 | `clase.actualizada` | booking-service | booking-indexer | Upsert del documento de la clase en OpenSearch (ignora versiones viejas) | CQRS |
@@ -310,6 +312,7 @@ Todos los eventos viajan con la misma envoltura JSON. La routing key es el nombr
 | Evento | Versión | Productor | Consumidores | Campos de `data` |
 |---|---|---|---|---|
 | `membresia.activada` | 1 | members-service | notification-worker | `membresia_id`, `alumno_id`, `alumno_nombre`, `alumno_email`, `tipo_membresia`, `fecha_inicio` (fecha), `fecha_vencimiento` (fecha), `operacion` (`ASIGNACION` \| `RENOVACION`), `membresia_anterior_id` (nullable) |
+| `alumno.creado` | 1 | members-service | benefits-service | `alumno_id` |
 | `asistencia.registrada` | 1 | booking-service | benefits-service | `asistencia_id`, `reserva_id`, `clase_id`, `alumno_id`, `actividad_id`, `actividad_nombre`, `clase_inicio` (RFC 3339), `resultado` (`ASISTIO` \| `AUSENTE`), `puntos` (int, valor de la actividad al registrar), `registrada_por`, `regularizacion` (bool, RN-38), `registrada_en` |
 | `clase.actualizada` | 1 | booking-service | booking-indexer | `clase_id`, `version` (int creciente por clase), `actividad_id`, `actividad_nombre`, `fecha`, `inicio`, `fin`, `franja` (nullable, solo Musculación), `profesor_id`, `profesor_nombre`, `capacidad`, `ocupacion`, `estado` (`PROGRAMADA` \| `EN_CURSO` \| `FINALIZADA` \| `CANCELADA`) |
 | `membresia.cancelada` | 1 | members-service | booking-service | `membresia_id`, `alumno_id`, `fecha_inicio`, `fecha_vencimiento`, `motivo`, `cancelada_en` |

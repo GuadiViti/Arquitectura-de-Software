@@ -1,6 +1,6 @@
-# Sistema Integral de Gestión de Gimnasio
+# METALFITNESS
 
-Trabajo Práctico Integrador de **Arquitectura de Software**: un sistema de microservicios para gestionar un gimnasio — alumnos, membresías, clases y reservas, asistencia, entrenamiento, nutrición y un **Club de Beneficios** con puntos que también usan sistemas de otros grupos.
+Trabajo Práctico Integrador de **Arquitectura de Software**: METALFITNESS es un sistema de microservicios para gestionar alumnos, membresías, clases y reservas, asistencia, entrenamiento, nutrición y un **Club de Beneficios** con puntos que también usan sistemas de otros grupos.
 
 > Estado: **esqueleto del proyecto**. Todos los servicios arrancan, verifican sus bases y reportan su estado en una pantalla web; todavía no hay funcionalidades de negocio. El contrato de la API de partners ya está publicado, con mock.
 
