@@ -124,7 +124,7 @@ Sin `make`: `docker compose --env-file .env -f deploy/docker-compose.yml up -d -
 | http://localhost:8080/api/v1/status | Estado agregado de todos los servicios |
 | http://localhost:4010 | Mock de la API de partners (Prism) |
 | http://localhost:15672 | RabbitMQ management (usuario y contraseña en `.env`) |
-| http://127.0.0.1:8081/health/ready | members-service (acceso directo solo para depurar) |
+| http://127.0.0.1:8081/health/ready | members-service (acceso directo solo para depurar; no prueba autenticación) |
 | http://127.0.0.1:8082/health/ready | booking-service |
 | http://127.0.0.1:8083/health/ready | benefits-service |
 | http://127.0.0.1:8084/health/ready | training-service |

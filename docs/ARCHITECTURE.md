@@ -2,7 +2,7 @@
 
 > Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
 >
-> - Versión: 1.5 (caché de autorización y disponibilidad degradada)
+> - Versión: 1.6 (autenticación, autorización y frontera de confianza)
 > - Fecha: 2026-10-08
 > - Incluye tres decisiones agregadas y aprobadas por el equipo (2026-10-07) para cubrir huecos con el SPEC: eventos `membresia.cancelada` y `usuario.desactivado`, consulta de asignaciones training → members y consulta de datos de alumnos booking → members. Registro completo en [Registro_de_Decisiones_Gimnasio.docx](../Registro_de_Decisiones_Gimnasio.docx) (D-20 a D-23).
 
@@ -64,7 +64,7 @@ Salvo que una sección indique expresamente el estado actual, sus descripciones 
 2. **Las invariantes fuertes viven dentro de un servicio.** Cupo y reserva están juntos en `booking-service`; saldo y movimientos juntos en `benefits-service`. No hay transacciones distribuidas.
 3. **Síncrono solo cuando la respuesta lo necesita** (verificar membresía vigente antes de reservar). La consulta es fresca, pero no forma una transacción distribuida; los cambios concurrentes convergen mediante eventos ([ADR-005 v2](adr/ADR-005-v2-comunicacion.md)).
 4. **Entrega al menos una vez + consumo idempotente.** Outbox para publicar y deduplicación para lograr un único efecto durable en la base del consumidor. Los efectos externos no transaccionales, como SMTP, conservan sus propias limitaciones.
-5. **El gateway es la frontera de confianza.** Los servicios confían en `X-User-Id` / `X-User-Role` porque solo el gateway puede llegar a ellos.
+5. **El gateway autentica toda entrada pública.** Limpia e inyecta `X-User-Id` / `X-User-Role`; cada servicio aplica autorización fina. En producción, los servicios solo son alcanzables desde la red privada y la confianza en cabeceras internas constituye el riesgo aceptado de ADR-006.
 
 ---
 
@@ -425,13 +425,18 @@ Detalle y justificación en [ADR-003](adr/ADR-003-persistencia.md).
 
 | Tema | Decisión |
 |---|---|
-| Autenticación de usuarios | Login en members-service; JWT RS256 (15 min) con `sub`, `role`, `iss=gym-members`, `aud=gym-api`. Sin refresh token en v1 (el usuario vuelve a loguearse). |
-| Autorización | Gruesa en el gateway (rol por ruta) y **fina en cada servicio** (ej. "solo el administrador", "solo su propia reserva"). El ingreso por DNI valida identidad y membresía en booking/members, no usa un rol de profesor. |
-| Confianza interna | Los servicios aceptan `X-User-Id`/`X-User-Role` porque **solo** son alcanzables desde la red interna de Docker; sus puertos no se publican en el host salvo en modo desarrollo. |
-| Partners | API key por partner (se muestra una sola vez, se guarda hash SHA-256), validada por benefits-service. Rate limit por key. |
+| Entrada pública | En producción, Traefik termina HTTPS y expone la SPA y las rutas del gateway. Servicios de negocio, bases, broker, caché y observabilidad permanecen en una red privada y no publican puertos en el host. |
+| Autenticación de usuarios | Login en members-service; JWT RS256 (15 min) con `sub`, `role`, `iss=gym-members`, `aud=gym-api`. Sin refresh token en v1 (el usuario vuelve a loguearse). El gateway es el único componente que interpreta el JWT. |
+| Identidad propagada | Antes de autenticar, el gateway elimina `X-User-Id`, `X-User-Role`, `X-Partner-Id` y todo `X-Internal-*` recibido. Después inyecta `X-User-Id` y `X-User-Role` únicamente desde un JWT verificado. Benefits deriva el partner de la API key validada y no acepta `X-Partner-Id` del cliente. Los servicios nunca aceptan identidad desde el body o query string. |
+| Autorización | Gruesa en el gateway (rol admitido por ruta) y **fina en cada servicio** sobre el recurso y los datos vigentes (ej. "solo el administrador", "solo su propia reserva", "solo un alumno asignado"). El ingreso por DNI valida identidad y membresía en booking/members, no usa un rol de profesor. |
+| Confianza interna | En v1, los servicios confían en las cabeceras de identidad por aislamiento de red; no hay mTLS ni firma entre procesos. Los puertos publicados en `127.0.0.1` por el compose local son solo de diagnóstico y no constituyen una frontera de seguridad. Las pruebas de autenticación/autorización se realizan a través del gateway. |
+| Rutas internas | El gateway rechaza cualquier ruta con un segmento `internal` después de normalizarla. Los endpoints `/internal/v1/**` solo son alcanzables entre procesos de la red privada. |
+| Partners | API key aleatoria por partner (se muestra una sola vez y se guarda su hash SHA-256), validada por benefits-service en cada solicitud junto con el estado del partner y la vinculación de la cuenta. Rate limit por key. |
 | Contraseñas | Hash con bcrypt (costo ≥ 12). |
-| Secretos | Variables de entorno; `.env.example` versionado, `.env` nunca. |
+| Secretos | Variables de entorno inyectadas al desplegar; `.env.example` solo contiene nombres/valores de desarrollo, `.env` nunca se versiona. |
 | Datos personales | No se loguean emails, DNI, tokens ni API keys. |
+
+Esta separación evita confundir autenticación con autorización: un JWT o una API key válidos identifican al actor, pero cada servicio dueño del dato decide qué recursos puede leer o modificar. CORS solo limita navegadores y no reemplaza ninguna de estas comprobaciones. La decisión completa y sus riesgos aceptados están en [ADR-006](adr/ADR-006-seguridad.md).
 
 ---
 
@@ -665,7 +670,7 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 
 | Aspecto | Detalle |
 |---|---|
-| Qué se expone a Internet | Solo el gateway (HTTPS): `/api/v1/**` para el frontend y `/partner-api/v1/**` para los partners |
+| Qué se expone a Internet | Solo Traefik por HTTPS: sirve la SPA y enruta `/api/v1/**` y `/partner-api/v1/**` al gateway |
 | Qué queda privado | Servicios, bases, broker, Redis, OpenSearch y la observabilidad (acceso por túnel SSH) |
 | Por qué | Paridad total con local, costo bajo y operación simple para un TP; las acreditaciones por asistencia funcionan porque booking también está desplegado |
 | Alternativa descartada | Desplegar solo gateway + benefits: alcanza para los partners, pero los puntos por asistencia nunca llegarían |
@@ -682,8 +687,8 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | L-04 | **Puntos por asistencia con demora** (asincrónicos). | El alumno puede no ver los puntos inmediatamente. | Lag objetivo < 5 s; reintentos + DLQ monitoreada. |
 | L-05 | **Entrega de email no transaccional.** Si el worker muere entre enviar por SMTP y registrar `ENVIADO`, el reintento puede duplicar el correo. | El alumno puede recibir más de una copia en una ventana de falla. | Una notificación lógica por membresía/tipo, trazabilidad de intentos y riesgo explícito en RN-05 y ADR-005 v2. |
 | L-06 | **Gateway, Redis, RabbitMQ y OpenSearch en instancia única.** | Puntos únicos de falla. | Aceptado para el alcance del TP; booking es el único servicio replicado para demostrar balanceo. |
-| L-07 | **JWT sin revocación.** Un usuario dado de baja conserva acceso hasta que vence el token. | Hasta 15 min de acceso residual. | Vida corta; los servicios verifican estado ACTIVO en operaciones sensibles. |
-| L-08 | **Confianza por red interna** (sin mTLS entre servicios). | Quien entre a la red interna puede falsificar identidad. | Puertos internos no publicados fuera de dev. |
+| L-07 | **JWT sin revocación.** Un usuario dado de baja o cuyo rol cambió conserva los claims anteriores hasta que vence el token. | Hasta 15 min de acceso residual, salvo operaciones que además consultan estado o permisos vigentes. | Vida corta; nueva autenticación para renovar identidad; estado y relaciones vigentes se verifican en operaciones sensibles. |
+| L-08 | **Confianza por red interna** (sin mTLS ni firma de cabeceras entre servicios). | Un proceso comprometido dentro de la red privada puede falsificar identidad. En desarrollo, una llamada directa desde el host puede hacer lo mismo. | En producción Traefik es la única entrada pública y el gateway solo se alcanza a través de él; reglas de firewall y red privada. Puertos loopback solo para diagnóstico local. mTLS queda fuera de v1. |
 | L-09 | **Outbox por polling.** | Latencia de hasta ~500 ms y carga constante sobre Postgres. | Índice parcial sobre pendientes; CDC queda como mejora futura. |
 | L-10 | **Sin orden garantizado** de eventos con 2 instancias de booking. | Un `clase.actualizada` viejo podría llegar tarde. | Campo `version` por clase; el indexer descarta versiones menores. |
 | L-11 | **Procesos programados en servicios replicados** (ausencias automáticas, vencimientos). | Doble ejecución. | `pg_advisory_lock` por job. |
@@ -709,6 +714,6 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | [ADR-004](adr/ADR-004-orden-movimientos-puntos.md) | D4 — Orden, atomicidad y consistencia del ledger de puntos | Aceptado |
 | [ADR-005 original](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona | Reemplazado por ADR-005 v2 |
 | [ADR-005 v2](adr/ADR-005-v2-comunicacion.md) | D5 — Comunicación y garantías entre servicios | Aceptado |
-| ADR-006 | D6 — *reservado* | — |
+| [ADR-006](adr/ADR-006-seguridad.md) | D6 — Autenticación, autorización y frontera de confianza | Aceptado |
 | [ADR-007](adr/ADR-007-cache-autorizacion-disponibilidad.md) | D7 — Caché, autorización y disponibilidad degradada | Aceptado |
 | [ADR-008](adr/ADR-008-contrato-propio.md) | D8 — Contrato propio: API de fidelización v1 | Aceptado |

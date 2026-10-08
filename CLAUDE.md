@@ -140,7 +140,7 @@ Equivalente sin make: `docker compose --env-file .env -f deploy/docker-compose.y
 7. **Consumir = idempotente.** Deduplicá por `event_id` en la misma transacción que el efecto y hacé ACK después del efecto.
 8. **Las invariantes críticas las garantiza la base** (cupo, unicidad, superposición, saldo ≥ 0) además del código. No las debilites para simplificar.
 9. **Escrituras sensibles aceptan `Idempotency-Key`** (reservar, cancelar, canjear, asistencia; obligatoria en la API de partners).
-10. **Identidad solo desde el gateway.** Los servicios leen `X-User-Id` / `X-User-Role`; nunca decodifican el JWT ni confían en datos de identidad del body.
+10. **Identidad solo desde el gateway.** El gateway elimina toda cabecera de identidad entrante, valida el JWT y recién entonces inyecta `X-User-Id` / `X-User-Role`. Los servicios nunca decodifican el JWT ni confían en identidad enviada en body o query; siempre aplican autorización fina sobre el recurso. Los puertos loopback del compose son solo de diagnóstico y las pruebas de seguridad pasan por el gateway (ADR-006).
 11. **Tests obligatorios** para toda regla de negocio, con los casos límite del SPEC §10 cuando apliquen. Integración con testcontainers, no mocks de la base.
 12. **Contratos versionados.** Cambios en APIs públicas, API de partners o eventos se documentan en `docs/contracts/` (API de partners: correr `make contract-lint` y actualizar el CHANGELOG de la guía), `docs/api/` o `docs/events/` y siguen las reglas de versionado de ARCHITECTURE §7.1.
 13. **Sin secretos en el repo.** Solo `.env.example`. Nunca commitees `.env`, claves ni API keys.
