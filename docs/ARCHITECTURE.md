@@ -2,7 +2,7 @@
 
 > Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
 >
-> - Versión: 1.4 (orden y atomicidad de movimientos de puntos)
+> - Versión: 1.5 (caché de autorización y disponibilidad degradada)
 > - Fecha: 2026-10-08
 > - Incluye tres decisiones agregadas y aprobadas por el equipo (2026-10-07) para cubrir huecos con el SPEC: eventos `membresia.cancelada` y `usuario.desactivado`, consulta de asignaciones training → members y consulta de datos de alumnos booking → members. Registro completo en [Registro_de_Decisiones_Gimnasio.docx](../Registro_de_Decisiones_Gimnasio.docx) (D-20 a D-23).
 
@@ -289,7 +289,7 @@ El rate limiting **falla abierto** (deja pasar y registra métrica `ratelimit_re
 | api-gateway | Servicios | Proxy | — | Según ruta | No (no conoce idempotencia de cada operación) | `502`/`504` RFC 7807 |
 | booking | members | Membresía vigente hoy y en la fecha de la clase (RN-12 b) | La reserva **no puede** confirmarse sin la respuesta | 800 ms | 1 reintento (GET idempotente) con backoff 100 ms + circuit breaker | **Falla cerrado:** `503 MEMBERS_NO_DISPONIBLE`; no se reserva |
 | booking | members | Datos mínimos de alumnos para listados del profesor | Composición de vistas | 800 ms | 1 | Se devuelve el listado con IDs sin nombre (degradación) |
-| training | members | ¿Alumno asignado al profesional? (RN-30) | Autorización | 800 ms | 1 + caché Redis 60 s | Falla cerrado: `503` |
+| training | members | ¿Alumno asignado al profesional? (RN-30) | Autorización | 800 ms | 1 reintento (GET idempotente); **sin caché** | **Falla cerrado:** `503 MEMBERS_NO_DISPONIBLE`; no se ejecuta la operación protegida |
 | benefits | members | Validar alumno al vincularlo a un partner | Validación de alta | 800 ms | 1 | `503`; el admin reintenta |
 | notification-worker | SMTP | Envío de email | Protocolo SMTP | 10 s | Vía colas de reintento | Reintento → DLQ |
 
@@ -414,9 +414,8 @@ Misma clave + mismo hash de request → misma respuesta guardada. Misma clave + 
 | Catálogo de actividades | booking | 10 min | Al modificar una actividad |
 | Catálogo de beneficios | benefits | 5 min | Al modificar un beneficio |
 | Tipos de membresía | members | 1 h | Al modificar un tipo |
-| Asignaciones profesional–alumno | training | 60 s | Solo TTL |
 
-**No se cachea** la vigencia de membresía al reservar: es una validación de negocio (RN-12) y un valor viejo podría permitir reservar con una membresía recién cancelada.
+**No se cachean los datos de autorización que requieren una decisión vigente:** vigencia de membresía, asignaciones profesional–alumno y validez de una API key. Un valor viejo podría permitir una operación después de cancelar una membresía, revocar una asignación o revocar una credencial. Si no se puede consultar al dueño del dato, la operación protegida falla cerrada; los listados que solo enriquecen una vista pueden degradar a identificadores. Redis se usa para acelerar catálogos y para contadores, no como fuente de esos permisos. Detalle en [ADR-007](adr/ADR-007-cache-autorizacion-disponibilidad.md).
 
 Detalle y justificación en [ADR-003](adr/ADR-003-persistencia.md).
 
@@ -515,22 +514,36 @@ Todo proceso Go (servicios, indexer, worker y gateway) expone:
 | Endpoint | Responde | Uso |
 |---|---|---|
 | `GET /health/live` | `200 {"status":"alive","checks":{}}` mientras el proceso atienda | Liveness |
-| `GET /health/ready` | `200` si todas sus dependencias propias responden; si alguna falla, `503` con el detalle por dependencia | Readiness, healthcheck de Docker Compose y `/api/v1/status` |
+| `GET /health/ready` | `200` si las dependencias críticas responden (`ready` o `degraded`); `503` si falla una crítica (`not_ready`) | Readiness, healthcheck de Docker Compose y `/api/v1/status` |
 | `GET /metrics` | *(etapa de observabilidad)* | Prometheus |
 
-Cuerpo de `/health/ready` (implementado en `pkg/health`; es un informe de estado, no un error RFC 7807):
+Cuerpo objetivo de `/health/ready` (el estado simple ya está implementado en `pkg/health`; la distinción entre controles críticos y parciales se agregará al incorporar esas dependencias). Es un informe de estado, no un error RFC 7807:
 
 ```json
-{ "status": "not_ready", "checks": { "postgres": { "status": "down", "latency_ms": 2000, "error": "timeout" } } }
+{
+  "status": "degraded",
+  "checks": {
+    "postgres": { "status": "up", "critical": true, "latency_ms": 3 },
+    "redis": { "status": "down", "critical": false, "latency_ms": 2000, "error": "timeout" }
+  }
+}
 ```
 
-| Proceso | Dependencias verificadas en `/health/ready` |
-|---|---|
-| members-service, booking-service, booking-indexer, benefits-service | PostgreSQL (su propia base) |
-| training-service, notification-worker | MongoDB (su propia base) |
-| api-gateway | Ninguna (su estado agregado está en `/api/v1/status`) |
+Una dependencia es **crítica** cuando el proceso no puede cumplir su responsabilidad principal sin ella. Una dependencia **parcial** afecta solo funciones concretas: se informa como `degraded`, pero el proceso continúa recibiendo tráfico. El endpoint afectado aplica su política propia (`503`, degradación de la respuesta, reintento o DLQ). Liveness nunca consulta dependencias externas.
 
-`GET /api/v1/status` (gateway) consulta en paralelo el `/health/ready` de cada proceso y devuelve `200` si todos están `ready` o `503` si alguno no lo está:
+| Proceso | Dependencias críticas | Dependencias parciales |
+|---|---|---|
+| members-service | PostgreSQL | RabbitMQ y Redis |
+| booking-service | PostgreSQL | members-service, OpenSearch, RabbitMQ y Redis |
+| booking-indexer | RabbitMQ y OpenSearch | PostgreSQL, usado solo para reindexado completo |
+| benefits-service | PostgreSQL | members-service, RabbitMQ y Redis |
+| training-service | MongoDB | members-service |
+| notification-worker | MongoDB y RabbitMQ | SMTP |
+| api-gateway | Ninguna | Redis y servicios de destino; su estado agregado está en `/api/v1/status` |
+
+La caída de RabbitMQ en un productor no impide confirmar escrituras locales porque el evento queda en el outbox. La caída de Redis hace bypass de las cachés hacia la fuente; el rate limiting general falla abierto y el login falla cerrado conforme a §5.3. La caída de members impide las operaciones que necesitan validar membresía, asignación o alumno, pero no retira por completo a booking, benefits o training. OpenSearch afecta las búsquedas de clases y SMTP mantiene los mensajes para reintento.
+
+`GET /api/v1/status` (gateway) consulta en paralelo el `/health/ready` de cada proceso. Devuelve `200` cuando todos están `ready` o `degraded`, y `503` si alguno está `not_ready` o `unreachable`:
 
 ```json
 {
@@ -542,7 +555,7 @@ Cuerpo de `/health/ready` (implementado en `pkg/health`; es un informe de estado
 }
 ```
 
-Estados por servicio: `ready`, `not_ready` (respondió 503) o `unreachable` (no respondió). Por ser un endpoint público, **no** reenvía los mensajes de error internos de cada dependencia.
+Estados por servicio: `ready`, `degraded`, `not_ready` (respondió 503) o `unreachable` (no respondió). El estado global es `degraded` si al menos un servicio lo está y ninguno está `not_ready` o `unreachable`. Por ser un endpoint público, **no** reenvía los mensajes de error internos de cada dependencia. Detalle en [ADR-007](adr/ADR-007-cache-autorizacion-disponibilidad.md).
 
 ---
 
@@ -675,11 +688,11 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | L-10 | **Sin orden garantizado** de eventos con 2 instancias de booking. | Un `clase.actualizada` viejo podría llegar tarde. | Campo `version` por clase; el indexer descarta versiones menores. |
 | L-11 | **Procesos programados en servicios replicados** (ausencias automáticas, vencimientos). | Doble ejecución. | `pg_advisory_lock` por job. |
 | L-12 | **Sin registro de esquemas** de eventos. | Rupturas de contrato detectadas tarde. | JSON Schema en `docs/events/` + tests de contrato en CI. |
-| L-13 | **Más dependencias síncronas hacia members** (asignaciones desde training, datos de alumnos desde booking), agregadas para cumplir RN-30 y HU-21. | members concentra más tráfico y su caída degrada training y los listados. | Caché de 60 s en training; listados degradan a IDs sin nombre. |
+| L-13 | **Más dependencias síncronas hacia members** (asignaciones desde training, datos de alumnos desde booking), agregadas para cumplir RN-30 y HU-21. | members concentra más tráfico; su caída rechaza las operaciones que necesitan autorización y degrada los listados. | Timeout, un reintento y circuit breaker; autorización sin caché y falla cerrada; listados degradan a IDs sin nombre. |
 | L-14 | **Stack local pesado** (~8 GB de RAM, 15 GB de disco). | Máquinas modestas pueden no levantarlo completo. | Perfil reducido sin observabilidad cuando esta se agregue; Dockerfiles con caché de módulos compartida. |
 | L-15 | **MongoDB standalone** (ADR-003 prevé un replica set de 1 nodo). | Sin transacciones multi-documento. | Ninguna operación las necesita todavía; se pasa a replica set cuando un caso de uso lo requiera. |
 | L-16 | **booking-service con 1 réplica y sin Traefik** en el esqueleto. | No se demuestra balanceo todavía. | Se agrega en la etapa de balanceo (2 réplicas + Traefik con health checks). |
-| L-17 | **Healthchecks de compose sobre `/health/ready`**. | Si la base de un servicio cae, Docker lo marca *unhealthy* (no lo reinicia). | Es lo esperado: el estado se ve en `/api/v1/status`. |
+| L-17 | **Healthchecks de compose sobre `/health/ready`**. | Si una dependencia crítica cae, Docker marca el proceso *unhealthy* (no lo reinicia); una dependencia parcial produce estado `degraded`. | Es lo esperado: el detalle se ve en `/api/v1/status` y solo se retira tráfico cuando falla la capacidad principal. |
 | L-18 | **Acreditaciones y penalizaciones no son conmutativas.** Dos operaciones concurrentes pueden dejar saldo 400 o 500 según cuál se aplique primero. | El resultado no se deduce solo de la fecha del hecho. | Bloqueo de cuenta, secuencia creciente y fechas de hecho/aplicación diferenciadas; orden auditable según ADR-004. |
 
 ---
@@ -696,5 +709,6 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | [ADR-004](adr/ADR-004-orden-movimientos-puntos.md) | D4 — Orden, atomicidad y consistencia del ledger de puntos | Aceptado |
 | [ADR-005 original](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona | Reemplazado por ADR-005 v2 |
 | [ADR-005 v2](adr/ADR-005-v2-comunicacion.md) | D5 — Comunicación y garantías entre servicios | Aceptado |
-| ADR-006, ADR-007 | D6, D7 — *reservados* | — |
+| ADR-006 | D6 — *reservado* | — |
+| [ADR-007](adr/ADR-007-cache-autorizacion-disponibilidad.md) | D7 — Caché, autorización y disponibilidad degradada | Aceptado |
 | [ADR-008](adr/ADR-008-contrato-propio.md) | D8 — Contrato propio: API de fidelización v1 | Aceptado |

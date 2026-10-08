@@ -104,7 +104,8 @@ internal/adapters/…              amqp, opensearch, members, outbox cuando haga
 - Dominio en **español** según el glosario del SPEC, sin tildes en identificadores (`Reserva`, `Membresia`, `CuentaBeneficios`). Términos técnicos en inglés (`Repository`, `Handler`).
 - Endpoints públicos: prefijos en **inglés** (`/api/v1/auth`, `users`, `memberships`, `activities`, `classes`, `bookings`, `check-ins`, `benefits`, `training`, `nutrition`; tabla en ARCHITECTURE §5.2). Un prefijo nuevo se agrega en `gateway/internal/config` y en esa tabla. API de partners: `/partner-api/v1/...`; internos: `/internal/v1/...` (el gateway responde 404 a cualquier ruta con un segmento `internal`).
 - Header de correlación: `X-Correlation-ID`. Lo maneja `pkg/correlation`; para llamadas salientes usá `correlation.Transport`.
-- Salud: `/health/live` y `/health/ready` con `pkg/health`. Cada dependencia propia nueva (Redis, RabbitMQ, OpenSearch…) se agrega como `health.Check` del servicio que la usa.
+- Salud: `/health/live` y `/health/ready` con `pkg/health`. Cada dependencia nueva se clasifica según ARCHITECTURE §12.3 y ADR-007: las críticas afectan readiness; las parciales se informan como `degraded` sin retirar todo el proceso. Liveness no consulta dependencias externas.
+- Caché y autorización: Redis solo acelera datos no críticos y contadores. No se cachean vigencia de membresía, asignaciones profesional–alumno ni validez de API keys. Si el dueño del dato no puede confirmar uno de esos permisos, la operación falla cerrada.
 - JSON y columnas: `snake_case`. **Excepción:** el contrato público para partners ([docs/contracts/](docs/contracts/README.md)) usa inglés y `camelCase` (ADR-008). Eventos: `<entidad>.<participio>`. Variables de entorno: `UPPER_SNAKE` con prefijo del servicio.
 - Fechas en APIs y eventos: RFC 3339 UTC. Reglas de negocio ("hoy", "vence hoy", "10 minutos antes"): zona `America/Argentina/Buenos_Aires`, siempre con un `Clock` inyectable.
 

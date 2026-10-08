@@ -3,7 +3,7 @@
 > Especificación funcional del Trabajo Práctico Integrador de Arquitectura de Software (microservicios).
 > Este documento es la **referencia funcional** durante todo el desarrollo. No define tecnologías, lenguajes, frameworks ni modelos de base de datos.
 >
-> - Versión: 0.8 (orden de aplicación de movimientos de puntos)
+> - Versión: 0.9 (vigencia de las autorizaciones)
 > - Fecha: 2026-10-08
 > - Convenciones: `HU-xx` = historia de usuario, `RN-xx` = regla de negocio, `CU-xx` = caso de uso, `CL-xx` = caso límite, `E2E-xx` = criterio de aceptación de punta a punta. Las palabras **DEBE**, **NO DEBE** y **PUEDE** tienen sentido normativo.
 
@@ -443,6 +443,7 @@ Reglas: RN-30.
 - **CA-21.1** Dado un profesor responsable de clases, cuando consulta "mis clases", entonces ve solo las clases donde es responsable con su ocupación y el listado de alumnos con reserva activa.
 - **CA-21.2** Dado un profesor, cuando consulta "mis alumnos", entonces ve los alumnos asignados a él y los que tienen reservas en sus clases. Dado un nutricionista, ve sus pacientes (alumnos asignados).
 - **CA-21.3** Dado un profesional, cuando intenta ver datos de un alumno que no es suyo, entonces se rechaza.
+- **CA-21.4** Dado que una asignación profesional–alumno fue revocada, cuando el profesional realiza la siguiente operación que requiere esa asignación, entonces el acceso se rechaza sin período de gracia.
 
 #### HU-22 — Registrar ingreso y asistencia automáticamente
 *Como alumno, quiero ingresar al gimnasio con mi DNI, para que el sistema registre automáticamente mi asistencia a la clase reservada.*
@@ -647,7 +648,7 @@ Reglas: RN-26.
 
 | ID | Regla |
 |---|---|
-| **RN-30** | **Visibilidad.** Un alumno solo accede a sus propios datos. Un profesor accede a sus clases y a los datos de sus alumnos (asignados o con reserva en sus clases); planes de entrenamiento solo de sus asignados. Un nutricionista accede solo a sus pacientes (planes alimenticios, mediciones y consultas). El administrador accede a todo. Un partner solo a lo indicado en RN-26. |
+| **RN-30** | **Visibilidad.** Un alumno solo accede a sus propios datos. Un profesor accede a sus clases y a los datos de sus alumnos (asignados o con reserva en sus clases); planes de entrenamiento solo de sus asignados. Un nutricionista accede solo a sus pacientes (planes alimenticios, mediciones y consultas). El administrador accede a todo. Un partner solo a lo indicado en RN-26. Cada operación cuyo permiso depende de una asignación se autoriza con la asignación vigente al momento de procesarla; una asignación revocada no concede un período de gracia. |
 | **RN-33** | **Unicidad de personas.** DNI y email son únicos entre alumnos y entre profesionales. |
 | **RN-34** | **Bajas lógicas.** Alumnos, profesionales, actividades, beneficios y partners se inactivan, no se eliminan. Dar de baja un alumno cancela sus reservas futuras. No se puede dar de baja un profesor con clases futuras PROGRAMADA a su cargo. |
 | **RN-35** | **Tiempo.** Todas las reglas temporales usan la hora oficial del servidor en la zona S-01. "Hoy", "futura" e "iniciada" se evalúan al momento de procesar la solicitud, no al momento de enviarla. |
@@ -1253,7 +1254,7 @@ stateDiagram-v2
 
 ---
 
-## Anexo A — Decisiones confirmadas y actualizaciones (v0.8)
+## Anexo A — Decisiones confirmadas y actualizaciones (v0.9)
 
 | ID | Tema | Decisión | Dónde impacta |
 |---|---|---|---|
@@ -1295,3 +1296,7 @@ Se explicitan las garantías posibles entre bases y sistemas independientes: la 
 ### Orden de movimientos — v0.8 (2026-10-08)
 
 Se define como orden canónico la secuencia en que benefits aplica las operaciones bajo bloqueo de la cuenta. La penalización usa el saldo disponible en ese momento; la fecha del hecho se conserva como dato histórico y no provoca el recálculo de movimientos inmutables. Esta regla hace explícito el resultado posible de acreditaciones y penalizaciones concurrentes.
+
+### Vigencia de las autorizaciones — v0.9 (2026-10-08)
+
+Se establece que las operaciones restringidas por una asignación profesional–alumno deben evaluar la asignación vigente al procesar cada solicitud. Revocarla impide la siguiente operación protegida y no existe un período de gracia por datos almacenados temporalmente.
