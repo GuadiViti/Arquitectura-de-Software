@@ -2,8 +2,8 @@
 
 > Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
 >
-> - Versión: 1.0 (etapa 02 — definición de arquitectura)
-> - Fecha: 2026-10-07
+> - Versión: 1.1 (arquitectura objetivo y estado implementado)
+> - Fecha: 2026-10-08
 > - Incluye tres decisiones agregadas y aprobadas por el equipo (2026-10-07) para cubrir huecos con el SPEC: eventos `membresia.cancelada` y `usuario.desactivado`, consulta de asignaciones training → members y consulta de datos de alumnos booking → members. Registro completo en [Registro_de_Decisiones_Gimnasio.docx](../Registro_de_Decisiones_Gimnasio.docx) (D-20 a D-23).
 
 ---
@@ -33,6 +33,17 @@
 
 El sistema se construye como un conjunto de **microservicios** organizados por **capacidad de negocio**, cada uno dueño de sus datos, detrás de un **API Gateway** propio que es el único punto de entrada del frontend y de los partners.
 
+Este documento describe la **arquitectura objetivo** del sistema. Las tablas de responsabilidades, los diagramas y las secciones de seguridad, comunicación, datos y observabilidad expresan el estado que debe alcanzar el proyecto. La tabla siguiente separa ese diseño del esqueleto implementado hasta la entrega inicial.
+
+| Estado | Componentes y comportamiento |
+|---|---|
+| **Implementado** | Módulos Go y ejecutables iniciales; health checks y readiness contra PostgreSQL/MongoDB; gateway con routing por prefijo, correlación, CORS, timeouts, errores y estado agregado; frontend de estado; bases y usuarios separados por servicio; contrato OpenAPI, guía y mock de partners. |
+| **Desplegado, todavía sin integración funcional** | Redis y RabbitMQ están en Docker Compose con health checks, pero ningún flujo de negocio usa aún caché, rate limiting ni mensajería. |
+| **Pendiente de implementación** | Casos de uso y persistencia de negocio; JWT e inyección de identidad; rate limiting; eventos, outbox, reintentos y DLQ; OpenSearch y CQRS; Traefik y segunda réplica de booking; SMTP/Mailpit; trazas, métricas, logs centralizados y tableros. |
+| **Pendiente de definición externa** | Capacidad que METALFITNESS consumirá de otro grupo, su proveedor y el flujo relevante donde se integrará, según SPEC §1.5 y la futura decisión D9. |
+
+Salvo que una sección indique expresamente el estado actual, sus descripciones deben leerse como decisiones y comportamiento **objetivo**, no como funcionalidad ya disponible.
+
 | Aspecto | Decisión |
 |---|---|
 | Backend | Go 1.22+ con Gin |
@@ -58,6 +69,8 @@ El sistema se construye como un conjunto de **microservicios** organizados por *
 ---
 
 ## 2. Diagrama C4 — Contexto
+
+El diagrama representa el contexto objetivo. La capacidad externa que consumirá METALFITNESS se incorporará cuando se conozcan el proveedor y el flujo correspondiente.
 
 ```mermaid
 flowchart TB
@@ -88,6 +101,8 @@ flowchart TB
 ---
 
 ## 3. Diagrama C4 — Contenedores
+
+El diagrama representa la distribución objetivo de contenedores; la tabla de §1 indica qué partes están implementadas actualmente.
 
 ```mermaid
 flowchart LR
@@ -156,7 +171,7 @@ flowchart LR
     notif -->|"SMTP"| smtp
 ```
 
-> Observabilidad (OTel Collector, Jaeger, Prometheus, Loki, Grafana) se omite del diagrama por claridad: **todos** los contenedores Go exportan trazas, métricas y logs al OTel Collector (ver §11).
+> Este es el diagrama objetivo. Observabilidad (OTel Collector, Jaeger, Prometheus, Loki y Grafana) se omite por claridad; cuando se implemente, los contenedores Go exportarán trazas, métricas y logs al OTel Collector (ver §11). La capacidad externa que consumirá METALFITNESS se agregará cuando se defina el proveedor y el flujo (SPEC §1.5).
 
 ---
 

@@ -2,7 +2,9 @@
 
 Trabajo Práctico Integrador de **Arquitectura de Software**: METALFITNESS es un sistema de microservicios para gestionar alumnos, membresías, clases y reservas, asistencia, entrenamiento, nutrición y un **Club de Beneficios** con puntos que también usan sistemas de otros grupos.
 
-> Estado: **esqueleto del proyecto**. Todos los servicios arrancan, verifican sus bases y reportan su estado en una pantalla web; todavía no hay funcionalidades de negocio. El contrato de la API de partners ya está publicado, con mock.
+> Estado actual: **esqueleto ejecutable del proyecto**. Los servicios exponen health checks, verifican sus bases y reportan su estado en una pantalla web; todavía no hay funcionalidades de negocio. El gateway ya realiza routing, correlación y timeouts. El contrato de la API de partners está publicado con un mock ejecutable.
+>
+> La arquitectura, el flujo principal y las responsabilidades que se presentan a continuación describen el **diseño objetivo**. JWT, rate limiting, casos de uso, eventos/outbox, CQRS con OpenSearch, balanceo con Traefik, envío de emails y observabilidad se incorporarán en las etapas correspondientes.
 
 ## Dominio
 
@@ -52,7 +54,7 @@ sequenceDiagram
 
 El detalle completo, con criterios de aceptación, está en [SPEC.md §11](SPEC.md#11-criterios-de-aceptación-del-flujo-principal-de-punta-a-punta).
 
-## Arquitectura en una tabla
+## Arquitectura objetivo en una tabla
 
 | Componente | Responsabilidad | Datos | Patrón | Puerto |
 |---|---|---|---|---|
@@ -65,6 +67,14 @@ El detalle completo, con criterios de aceptación, está en [SPEC.md §11](SPEC.
 | `notification-worker` | Emails de confirmación y vencimiento de membresía | MongoDB `notifications_db` | Consumidor | 8085 |
 
 Más detalle en [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+### Estado de implementación
+
+| Estado | Alcance |
+|---|---|
+| **Implementado** | Módulos y ejecutables iniciales; health checks y readiness contra PostgreSQL/MongoDB; gateway con routing, correlación, CORS, timeouts y estado agregado; frontend de estado; contrato OpenAPI, guía y mock de partners. |
+| **Desplegado como infraestructura, todavía sin uso funcional** | Redis y RabbitMQ. |
+| **Pendiente** | Funcionalidades de negocio; autenticación JWT e identidad; rate limiting; publicación y consumo de eventos con outbox; caché; búsqueda en OpenSearch; dos instancias de booking detrás de Traefik; emails; trazas, métricas y tableros; consumo de la capacidad externa que se defina con otro grupo. |
 
 ## Cómo ejecutarlo localmente
 
