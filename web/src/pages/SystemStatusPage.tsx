@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
 import { API_URL, ApiError } from '../api/client';
-import { getSystemStatus, type ServiceState, type SystemStatus } from '../api/status';
+import { getSystemStatus, type ServiceState, type SystemState, type SystemStatus } from '../api/status';
 
 const REFRESH_MS = 10_000;
 
 const SERVICE_LABEL: Record<ServiceState, string> = {
   ready: 'Listo',
+  degraded: 'Degradado',
   not_ready: 'No listo',
   unreachable: 'Sin respuesta',
+};
+
+const SUMMARY: Record<SystemState, { text: string; tone: 'ok' | 'warn' | 'bad' }> = {
+  ready: { text: 'Todos los servicios están listos', tone: 'ok' },
+  degraded: { text: 'Sistema operativo con funciones degradadas', tone: 'warn' },
+  not_ready: { text: 'Sistema no disponible: hay servicios que no están listos', tone: 'bad' },
 };
 
 const CHECK_LABEL: Record<string, string> = {
@@ -39,7 +46,7 @@ export function SystemStatusPage() {
     return () => window.clearInterval(id);
   }, [load]);
 
-  const overallReady = data?.status === 'ready';
+  const summary = data ? (SUMMARY[data.status] ?? SUMMARY.not_ready) : null;
 
   return (
     <main className="page">
@@ -62,12 +69,12 @@ export function SystemStatusPage() {
         </div>
       )}
 
-      {data && (
+      {data && summary && (
         <>
-          <section className={`summary ${overallReady ? 'ok' : 'bad'}`} aria-live="polite">
+          <section className={`summary ${summary.tone}`} aria-live="polite">
             <span className="summary-dot" aria-hidden="true" />
             <div>
-              <strong>{overallReady ? 'Todos los servicios están listos' : 'Sistema degradado'}</strong>
+              <strong>{summary.text}</strong>
               <div className="muted">Última verificación: {new Date(data.checked_at).toLocaleString('es-AR')}</div>
             </div>
           </section>

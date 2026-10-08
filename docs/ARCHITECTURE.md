@@ -522,7 +522,7 @@ Todo proceso Go (servicios, indexer, worker y gateway) expone:
 | `GET /health/ready` | `200` si las dependencias críticas responden (`ready` o `degraded`); `503` si falla una crítica (`not_ready`) | Readiness, healthcheck de Docker Compose y `/api/v1/status` |
 | `GET /metrics` | *(etapa de observabilidad)* | Prometheus |
 
-Cuerpo objetivo de `/health/ready` (el estado simple ya está implementado en `pkg/health`; la distinción entre controles críticos y parciales se agregará al incorporar esas dependencias). Es un informe de estado, no un error RFC 7807:
+Cuerpo de `/health/ready`, implementado en `pkg/health` (cada `health.Check` es crítico por defecto; `Partial: true` lo marca como parcial). Cada servicio declara sus controles a medida que incorpora cada dependencia. Es un informe de estado, no un error RFC 7807:
 
 ```json
 {
@@ -630,7 +630,7 @@ Estados por servicio: `ready`, `degraded`, `not_ready` (respondió 503) o `unrea
     └── e2e/                        # flujos E2E del SPEC §11 contra el stack levantado
 ```
 
-**Módulos Go:** un `go.mod` por servicio, por `gateway/` y por `pkg/`, unidos con `go.work`. Cada `go.mod` de servicio referencia `pkg` con `replace ../../pkg`, así la imagen Docker compila sin `go.work`. Un servicio no puede importar `internal/` de otro. El patrón de cada servicio está en [ADR-002](adr/ADR-002-patrones-internos.md).
+**Módulos Go:** un `go.mod` por servicio, por `gateway/` y por `pkg/`, unidos con `go.work`. Cada `go.mod` de servicio referencia `pkg` con `replace ../../pkg`, así la imagen Docker compila sin `go.work`. Un servicio no puede importar `internal/` de otro. El patrón de cada servicio está en [ADR-002 v2](adr/ADR-002-v2-patrones-internos.md).
 
 ---
 

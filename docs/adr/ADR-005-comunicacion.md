@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Estado** | Aceptado |
+| **Estado** | Reemplazado por [ADR-005 v2](ADR-005-v2-comunicacion.md) |
 | **Fecha** | 2026-10-07 |
 | **Decisión del TP** | D5 |
 | **Autores** | Equipo del TPI |

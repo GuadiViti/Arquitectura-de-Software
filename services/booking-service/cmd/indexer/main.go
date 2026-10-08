@@ -2,8 +2,9 @@
 // lectura de clases en OpenSearch consumiendo clase.actualizada (CQRS de lectura).
 //
 // En esta etapa es solo el esqueleto: arranca, expone /health/live y
-// /health/ready (verifica booking_db, que usará para el reindexado completo) y
-// se apaga ordenadamente. El consumidor y OpenSearch se agregan más adelante.
+// /health/ready (verifica booking_db como dependencia parcial, que usará para el
+// reindexado completo) y se apaga ordenadamente. El consumidor y OpenSearch se
+// agregan más adelante.
 package main
 
 import (
@@ -46,7 +47,9 @@ func run(cfg config.Config, log *slog.Logger) error {
 	}
 	defer db.Close()
 
-	router := bookinghttp.NewRouter(log, cfg.HealthTimeout, health.Check{Name: "postgres", Fn: db.Ping})
+	// ADR-007: para el indexer, PostgreSQL es parcial (solo lo usa el reindexado completo).
+	// Sus dependencias críticas (RabbitMQ y OpenSearch) se agregan con el consumidor.
+	router := bookinghttp.NewRouter(log, cfg.HealthTimeout, health.Check{Name: "postgres", Fn: db.Ping, Partial: true})
 	return httpserver.Run(ctx, log, httpserver.Options{
 		Addr:            cfg.IndexerHTTPAddr,
 		Handler:         router,

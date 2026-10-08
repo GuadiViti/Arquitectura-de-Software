@@ -1,8 +1,10 @@
-// Package health expone los endpoints de salud comunes a todos los servicios:
+// Package health expone los endpoints de salud comunes a todos los servicios
+// (ADR-007, ARCHITECTURE §12.3):
 //
-//   - GET /health/live: el proceso está vivo (siempre 200 mientras responda).
-//   - GET /health/ready: el servicio puede atender; verifica cada dependencia
-//     propia (Postgres, Mongo…). Si alguna falla responde 503 con el detalle.
+//   - GET /health/live: el proceso puede atender HTTP. Nunca consulta dependencias.
+//   - GET /health/ready: verifica cada dependencia propia. Si cae una crítica
+//     responde 503 "not_ready"; si solo caen parciales, 200 "degraded"; si todas
+//     responden, 200 "ready".
 //
 // El cuerpo de ambos es un Report JSON (no RFC 7807): es un informe de estado
 // que el api-gateway agrega en GET /api/v1/status.
@@ -21,20 +23,27 @@ import (
 // Estados posibles.
 const (
 	StatusReady    = "ready"
+	StatusDegraded = "degraded"
 	StatusNotReady = "not_ready"
 	StatusUp       = "up"
 	StatusDown     = "down"
 )
 
 // Check verifica una dependencia. Fn debe respetar la cancelación del context.
+//
+// Por defecto la dependencia es crítica: el proceso no puede cumplir su
+// responsabilidad principal sin ella. Partial la marca como parcial: si cae,
+// el proceso sigue recibiendo tráfico y se informa como degradado.
 type Check struct {
-	Name string
-	Fn   func(ctx context.Context) error
+	Name    string
+	Fn      func(ctx context.Context) error
+	Partial bool
 }
 
 // CheckResult es el resultado de un Check.
 type CheckResult struct {
 	Status    string `json:"status"`
+	Critical  bool   `json:"critical"`
 	LatencyMS int64  `json:"latency_ms"`
 	Error     string `json:"error,omitempty"`
 }
@@ -52,6 +61,7 @@ func Evaluate(ctx context.Context, timeout time.Duration, checks ...Check) Repor
 	report := Report{Status: StatusReady, Checks: make(map[string]CheckResult, len(checks))}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	criticalDown, partialDown := false, false
 	for _, chk := range checks {
 		wg.Add(1)
 		go func(chk Check) {
@@ -61,7 +71,7 @@ func Evaluate(ctx context.Context, timeout time.Duration, checks ...Check) Repor
 
 			start := time.Now()
 			err := chk.Fn(cctx)
-			res := CheckResult{Status: StatusUp, LatencyMS: time.Since(start).Milliseconds()}
+			res := CheckResult{Status: StatusUp, Critical: !chk.Partial, LatencyMS: time.Since(start).Milliseconds()}
 			if err != nil {
 				res.Status = StatusDown
 				res.Error = describe(cctx, err)
@@ -70,12 +80,23 @@ func Evaluate(ctx context.Context, timeout time.Duration, checks ...Check) Repor
 			mu.Lock()
 			report.Checks[chk.Name] = res
 			if err != nil {
-				report.Status = StatusNotReady
+				if chk.Partial {
+					partialDown = true
+				} else {
+					criticalDown = true
+				}
 			}
 			mu.Unlock()
 		}(chk)
 	}
 	wg.Wait()
+
+	switch {
+	case criticalDown:
+		report.Status = StatusNotReady
+	case partialDown:
+		report.Status = StatusDegraded
+	}
 	return report
 }
 
@@ -98,7 +119,7 @@ func Register(r gin.IRoutes, timeout time.Duration, checks ...Check) {
 	r.GET("/health/ready", func(c *gin.Context) {
 		report := Evaluate(c.Request.Context(), timeout, checks...)
 		status := http.StatusOK
-		if report.Status != StatusReady {
+		if report.Status == StatusNotReady {
 			status = http.StatusServiceUnavailable
 		}
 		c.JSON(status, report)

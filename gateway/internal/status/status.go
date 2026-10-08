@@ -73,14 +73,22 @@ func (c *Checker) Check(ctx context.Context) Summary {
 	}
 	wg.Wait()
 
-	summary := Summary{Status: Ready, CheckedAt: c.now().UTC(), Services: results}
+	return Summary{Status: aggregate(results), CheckedAt: c.now().UTC(), Services: results}
+}
+
+// aggregate aplica ADR-007: not_ready si algún servicio está not_ready o
+// unreachable; si no, degraded si alguno está degraded; si no, ready.
+func aggregate(results []ServiceStatus) string {
+	overall := Ready
 	for _, r := range results {
-		if r.Status != Ready {
-			summary.Status = Degraded
-			break
+		switch r.Status {
+		case NotReady, Unreachable:
+			return NotReady
+		case Degraded:
+			overall = Degraded
 		}
 	}
-	return summary
+	return overall
 }
 
 func (c *Checker) checkOne(ctx context.Context, t Target) ServiceStatus {
@@ -112,6 +120,8 @@ func (c *Checker) checkOne(ctx context.Context, t Target) ServiceStatus {
 	switch {
 	case resp.StatusCode == http.StatusOK && report.Status == health.StatusReady:
 		res.Status = Ready
+	case resp.StatusCode == http.StatusOK && report.Status == health.StatusDegraded:
+		res.Status = Degraded
 	case resp.StatusCode == http.StatusServiceUnavailable:
 		res.Status = NotReady
 	default:
