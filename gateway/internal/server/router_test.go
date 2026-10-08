@@ -30,15 +30,15 @@ type upstream struct {
 	paths []string
 	corr  []string
 	delay time.Duration
-	ready int
+	state string // ready | degraded | not_ready
 }
 
 func newUpstream(t *testing.T, name string) *upstream {
 	t.Helper()
-	u := &upstream{ready: http.StatusOK}
+	u := &upstream{state: "ready"}
 	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
-		ready, delay := u.ready, u.delay
+		state, delay := u.state, u.delay
 		if r.URL.Path != "/health/ready" {
 			u.paths = append(u.paths, r.URL.Path)
 			u.corr = append(u.corr, r.Header.Get(correlation.Header))
@@ -47,12 +47,16 @@ func newUpstream(t *testing.T, name string) *upstream {
 
 		if r.URL.Path == "/health/ready" {
 			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(ready)
-			st := "ready"
-			if ready != http.StatusOK {
-				st = "not_ready"
+			code, redis := http.StatusOK, "up"
+			switch state {
+			case "not_ready":
+				code = http.StatusServiceUnavailable
+			case "degraded":
+				redis = "down"
 			}
-			_, _ = io.WriteString(w, `{"status":"`+st+`","checks":{"postgres":{"status":"up","latency_ms":1}}}`)
+			w.WriteHeader(code)
+			_, _ = io.WriteString(w, `{"status":"`+state+`","checks":{"postgres":{"status":"up","critical":true,"latency_ms":1},`+
+				`"redis":{"status":"`+redis+`","critical":false,"latency_ms":1}}}`)
 			return
 		}
 		if delay > 0 {
@@ -230,25 +234,57 @@ func TestStatus_TodosReady(t *testing.T) {
 	}
 }
 
-func TestStatus_Degradado(t *testing.T) {
-	f := newFixture(t, map[string]string{"GATEWAY_NOTIFICATION_URL": "http://127.0.0.1:1"})
-	be := f.upstreams[gwconfig.Benefits]
-	be.mu.Lock()
-	be.ready = http.StatusServiceUnavailable
-	be.mu.Unlock()
+func (u *upstream) setState(state string) {
+	u.mu.Lock()
+	u.state = state
+	u.mu.Unlock()
+}
 
-	rec := f.do(http.MethodGet, "/api/v1/status", nil)
-	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
+func statusByService(t *testing.T, rec *httptest.ResponseRecorder) (status.Summary, map[string]string) {
+	t.Helper()
 	var s status.Summary
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &s))
-	assert.Equal(t, status.Degraded, s.Status)
 	got := map[string]string{}
 	for _, svc := range s.Services {
 		got[svc.Name] = svc.Status
 	}
+	return s, got
+}
+
+// ADR-007: una dependencia parcial caída deja el sistema degraded con 200.
+func TestStatus_DegradadoResponde200(t *testing.T) {
+	f := newFixture(t, nil)
+	f.upstreams[gwconfig.Booking].setState("degraded")
+
+	rec := f.do(http.MethodGet, "/api/v1/status", nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	s, got := statusByService(t, rec)
+	assert.Equal(t, status.Degraded, s.Status)
+	assert.Equal(t, status.Degraded, got[gwconfig.Booking])
+	assert.Equal(t, status.Ready, got[gwconfig.Members])
+	for _, svc := range s.Services {
+		if svc.Name == gwconfig.Booking {
+			assert.Equal(t, "down", svc.Checks["redis"])
+		}
+	}
+}
+
+// ADR-007: un servicio not_ready o unreachable deja el sistema not_ready con 503,
+// aunque otro esté solo degradado.
+func TestStatus_NoDisponibleResponde503(t *testing.T) {
+	f := newFixture(t, map[string]string{"GATEWAY_NOTIFICATION_URL": "http://127.0.0.1:1"})
+	f.upstreams[gwconfig.Benefits].setState("not_ready")
+	f.upstreams[gwconfig.Booking].setState("degraded")
+
+	rec := f.do(http.MethodGet, "/api/v1/status", nil)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	s, got := statusByService(t, rec)
+	assert.Equal(t, status.NotReady, s.Status)
 	assert.Equal(t, status.NotReady, got[gwconfig.Benefits])
 	assert.Equal(t, status.Unreachable, got[gwconfig.Notification])
+	assert.Equal(t, status.Degraded, got[gwconfig.Booking])
 	assert.Equal(t, status.Ready, got[gwconfig.Members])
 	assert.False(t, strings.Contains(rec.Body.String(), "127.0.0.1"), "no expone detalles internos")
 }

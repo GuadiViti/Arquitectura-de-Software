@@ -24,7 +24,7 @@ func NewRouter(log *slog.Logger, corsOrigins []string, p *proxy.Proxy, checker *
 	r.GET("/api/v1/status", func(c *gin.Context) {
 		summary := checker.Check(c.Request.Context())
 		code := http.StatusOK
-		if summary.Status != status.Ready {
+		if summary.Status == status.NotReady {
 			code = http.StatusServiceUnavailable
 		}
 		c.JSON(code, summary)

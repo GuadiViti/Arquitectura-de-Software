@@ -24,23 +24,40 @@ func slow(ctx context.Context) error {
 }
 
 func TestEvaluate_TodasLasDependenciasArriba(t *testing.T) {
-	r := Evaluate(context.Background(), time.Second, Check{"postgres", ok}, Check{"cache", ok})
+	r := Evaluate(context.Background(), time.Second, Check{Name: "postgres", Fn: ok}, Check{Name: "cache", Fn: ok})
 	assert.Equal(t, StatusReady, r.Status)
 	assert.Equal(t, StatusUp, r.Checks["postgres"].Status)
 	assert.Equal(t, StatusUp, r.Checks["cache"].Status)
 }
 
 func TestEvaluate_UnaDependenciaCaidaDejaNotReady(t *testing.T) {
-	r := Evaluate(context.Background(), time.Second, Check{"postgres", failing}, Check{"cache", ok})
+	r := Evaluate(context.Background(), time.Second, Check{Name: "postgres", Fn: failing}, Check{Name: "cache", Fn: ok})
 	assert.Equal(t, StatusNotReady, r.Status)
 	assert.Equal(t, StatusDown, r.Checks["postgres"].Status)
 	assert.Equal(t, "connection refused", r.Checks["postgres"].Error)
 	assert.Equal(t, StatusUp, r.Checks["cache"].Status)
 }
 
+func TestEvaluate_ParcialCaidaDejaDegraded(t *testing.T) {
+	r := Evaluate(context.Background(), time.Second,
+		Check{Name: "postgres", Fn: ok},
+		Check{Name: "redis", Fn: failing, Partial: true})
+	assert.Equal(t, StatusDegraded, r.Status)
+	assert.True(t, r.Checks["postgres"].Critical)
+	assert.False(t, r.Checks["redis"].Critical)
+	assert.Equal(t, StatusDown, r.Checks["redis"].Status)
+}
+
+func TestEvaluate_CriticaCaidaPrevaleceSobreParcial(t *testing.T) {
+	r := Evaluate(context.Background(), time.Second,
+		Check{Name: "postgres", Fn: failing},
+		Check{Name: "redis", Fn: failing, Partial: true})
+	assert.Equal(t, StatusNotReady, r.Status)
+}
+
 func TestEvaluate_RespetaElTimeout(t *testing.T) {
 	start := time.Now()
-	r := Evaluate(context.Background(), 50*time.Millisecond, Check{"mongo", slow})
+	r := Evaluate(context.Background(), 50*time.Millisecond, Check{Name: "mongo", Fn: slow})
 	assert.Less(t, time.Since(start), time.Second)
 	assert.Equal(t, StatusNotReady, r.Status)
 	assert.Equal(t, "timeout", r.Checks["mongo"].Error)
@@ -63,19 +80,25 @@ func serve(t *testing.T, path string, checks ...Check) (*httptest.ResponseRecord
 }
 
 func TestRegister_Live(t *testing.T) {
-	rec, report := serve(t, "/health/live", Check{"postgres", failing})
+	rec, report := serve(t, "/health/live", Check{Name: "postgres", Fn: failing})
 	assert.Equal(t, http.StatusOK, rec.Code, "live no depende de las dependencias")
 	assert.Equal(t, "alive", report.Status)
 }
 
 func TestRegister_ReadyOK(t *testing.T) {
-	rec, report := serve(t, "/health/ready", Check{"postgres", ok})
+	rec, report := serve(t, "/health/ready", Check{Name: "postgres", Fn: ok})
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, StatusReady, report.Status)
 }
 
+func TestRegister_Degraded200(t *testing.T) {
+	rec, report := serve(t, "/health/ready", Check{Name: "postgres", Fn: ok}, Check{Name: "redis", Fn: failing, Partial: true})
+	assert.Equal(t, http.StatusOK, rec.Code, "una dependencia parcial caída no retira el proceso")
+	assert.Equal(t, StatusDegraded, report.Status)
+}
+
 func TestRegister_Ready503ConDetalle(t *testing.T) {
-	rec, report := serve(t, "/health/ready", Check{"postgres", failing})
+	rec, report := serve(t, "/health/ready", Check{Name: "postgres", Fn: failing})
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Equal(t, StatusNotReady, report.Status)
 	assert.Equal(t, StatusDown, report.Checks["postgres"].Status)

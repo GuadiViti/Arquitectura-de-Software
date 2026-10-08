@@ -128,6 +128,10 @@ button:disabled {
   background: var(--ok);
 }
 
+.summary.warn .summary-dot {
+  background: var(--warn);
+}
+
 .summary.bad .summary-dot {
   background: var(--bad);
 }
@@ -192,6 +196,7 @@ th {
   color: var(--bad);
 }
 
+.badge.degraded,
 .badge.unreachable {
   background: var(--warn-bg);
   color: var(--warn);

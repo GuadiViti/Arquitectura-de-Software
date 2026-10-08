@@ -31,9 +31,9 @@ Sistema integral de gestión de gimnasio: Trabajo Práctico Integrador de Arquit
 |---|---|---|---|---|---|
 | `api-gateway` | 8080 | Middlewares | Redis (rate limit) | — | — |
 | `members-service` | 8081 | **Capas** | PostgreSQL `members_db` | `membresia.activada`, `membresia.cancelada`, `usuario.desactivado` | — |
-| `booking-service` (×2 con Traefik desde la etapa de balanceo; hoy ×1) | 8082 | **Hexagonal + CQRS** | PostgreSQL `booking_db` + OpenSearch | `asistencia.registrada`, `clase.actualizada` | `membresia.cancelada`, `usuario.desactivado` |
+| `booking-service` (×2 con Traefik desde la etapa de balanceo; hoy ×1) | 8082 | **Hexagonal + CQRS** | PostgreSQL `booking_db` + OpenSearch | `asistencia.registrada`, `inasistencia.registrada`, `clase.actualizada` | `membresia.cancelada`, `usuario.desactivado` |
 | `booking-indexer` | 8086 (solo health) | Consumidor | OpenSearch `clases` | — | `clase.actualizada` |
-| `benefits-service` | 8083 | **Hexagonal** | PostgreSQL `benefits_db` | — | `asistencia.registrada` |
+| `benefits-service` | 8083 | **Hexagonal** | PostgreSQL `benefits_db` | — | `asistencia.registrada`, `inasistencia.registrada` |
 | `training-service` | 8084 | **Capas** | MongoDB `training_db` | — | — |
 | `notification-worker` | 8085 | Consumidor | MongoDB `notifications_db` | — | `membresia.activada` |
 | `web` | 5173 | SPA | — | — | — |

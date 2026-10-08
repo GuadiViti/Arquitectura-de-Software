@@ -2,7 +2,7 @@
 
 | Campo | Valor |
 |---|---|
-| **Estado** | Aceptado |
+| **Estado** | Reemplazado por [ADR-002 v2](ADR-002-v2-patrones-internos.md) |
 | **Fecha** | 2026-10-07 |
 | **Decisión del TP** | D2 |
 | **Autores** | Pastore, Martina · Schaffer, Matías · Viti, María Guadalupe |
