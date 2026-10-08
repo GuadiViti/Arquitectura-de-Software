@@ -3,8 +3,8 @@
 > Especificación funcional del Trabajo Práctico Integrador de Arquitectura de Software (microservicios).
 > Este documento es la **referencia funcional** durante todo el desarrollo. No define tecnologías, lenguajes, frameworks ni modelos de base de datos.
 >
-> - Versión: 0.6 (reglas y criterios de aceptación unificados)
-> - Fecha: 2026-10-07
+> - Versión: 0.7 (garantías de consistencia entre servicios)
+> - Fecha: 2026-10-08
 > - Convenciones: `HU-xx` = historia de usuario, `RN-xx` = regla de negocio, `CU-xx` = caso de uso, `CL-xx` = caso límite, `E2E-xx` = criterio de aceptación de punta a punta. Las palabras **DEBE**, **NO DEBE** y **PUEDE** tienen sentido normativo.
 
 ---
@@ -81,7 +81,7 @@ Dentro del alcance de esta especificación:
 | S-07 | La asistencia solo se registra sobre alumnos con **reserva activa** en esa clase (no hay "asistencia sin reserva"). |
 | S-08 | El alumno registra automáticamente su asistencia al ingresar al gimnasio mediante DNI. El sistema valida una reserva CONFIRMADA de una clase en curso y la pasa a ASISTIDA. Al finalizar la clase, las reservas que no registraron ingreso pasan automáticamente a AUSENTE. Una asistencia no se modifica; las correcciones de puntos las hace el administrador mediante reversión (RN-25). |
 | S-09 | Los puntos se expresan como números enteros. La asistencia suma **500 puntos** y una reserva confirmada que termina sin ingreso genera una penalización de **-100 puntos**. El saldo nunca puede ser negativo: la penalización se aplica hasta llegar a 0. |
-| S-10 | Cada alumno tiene exactamente una **cuenta de beneficios**, creada automáticamente al darlo de alta. |
+| S-10 | Cada alumno tiene exactamente una **cuenta de beneficios**. Su creación se dispara automáticamente al confirmar el alta y se completa de forma eventual; no bloquea ni revierte el alta del alumno si el Club de Beneficios está temporalmente indisponible. |
 | S-11 | Los "usuarios propios" de un partner son **cuentas de beneficios de alumnos del gimnasio vinculadas a ese partner** (mediante un identificador externo del partner). No existen cuentas de personas que no sean alumnos. Un partner solo opera sobre cuentas vinculadas a él. |
 | S-12 | Un alumno tiene como máximo **un plan de entrenamiento vigente** y **un plan alimenticio vigente** a la vez; los anteriores se conservan como historial. |
 | S-13 | La renovación de una membresía genera una **nueva membresía** (no modifica la anterior), para conservar el historial. |
@@ -163,7 +163,7 @@ La elección del microservicio consumidor y los detalles técnicos se documentar
 
 ### 3.1 Administrador
 
-- Gestionar **alumnos**: alta (crea también su cuenta de beneficios), modificación, baja lógica, consulta y búsqueda.
+- Gestionar **alumnos**: alta (dispara la creación eventual de su cuenta de beneficios), modificación, baja lógica, consulta y búsqueda.
 - Gestionar **profesionales**: alta indicando subtipo (PROFESOR / NUTRICIONISTA), modificación, baja lógica, consulta.
 - **Asignar y desasignar alumnos** a profesionales.
 - Gestionar **tipos de membresía** (nombre, duración por defecto).
@@ -240,7 +240,7 @@ La integración externa no es un usuario ni un rol del sistema. El administrador
 *Como administrador, quiero dar de alta, modificar, dar de baja y consultar alumnos, para mantener el padrón actualizado.*
 Reglas: RN-30, RN-33, RN-34.
 
-- **CA-01.1** Dado un DNI que no existe, cuando el administrador da de alta un alumno con datos obligatorios válidos, entonces el alumno queda ACTIVO y se le crea una cuenta de beneficios con saldo 0.
+- **CA-01.1** Dado un DNI que no existe, cuando el administrador da de alta un alumno con datos obligatorios válidos, entonces el alumno queda ACTIVO y queda registrada de forma durable la creación de su cuenta de beneficios; cuando el Club de Beneficios procesa el hecho, crea una única cuenta con saldo 0.
 - **CA-01.2** Dado un alumno existente con DNI X, cuando se intenta dar de alta otro alumno con DNI X o el mismo email, entonces la operación se rechaza indicando duplicado.
 - **CA-01.3** Dado un alumno con reservas futuras activas, cuando el administrador lo da de baja, entonces el alumno queda INACTIVO, sus reservas futuras pasan a CANCELADA y su historial se conserva.
 - **CA-01.4** Dado un alumno INACTIVO, cuando intenta iniciar sesión, entonces el acceso se rechaza.
@@ -377,6 +377,7 @@ Reglas: RN-01, RN-12, RN-13, RN-14, RN-15, RN-16, RN-39, RN-40.
 - **CA-14.10** Dado el caso anterior, cuando el alumno cancela el turno 08:00–10:00 y luego reserva el turno 16:00–18:00, entonces la reserva se acepta.
 - **CA-14.11** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00, cuando intenta reservar Funcional de 19:30 a 20:30 o el turno de Musculación de 18:00 a 20:00, entonces se rechaza con el motivo "superposición con otra reserva".
 - **CA-14.12** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00 y que cumple las demás condiciones de RN-12, cuando reserva GAP de 20:00 a 21:00 o, como alternativa, Musculación de 20:00 a 22:00, entonces se acepta (los horarios consecutivos no se superponen).
+- **CA-14.13** Dado que la membresía que cubre la fecha de una clase se cancela al mismo tiempo que el alumno intenta reservarla, cuando ambas operaciones terminan y se propaga la cancelación, entonces la reserva no permanece CONFIRMADA: se rechaza durante la validación o converge a CANCELADA, sin ocupar cupo.
 
 #### HU-15 — Cancelar una reserva
 *Como alumno, quiero cancelar una reserva, para liberar el lugar si no puedo ir.*
@@ -517,7 +518,7 @@ Reglas: RN-01, RN-03.
 Reglas: RN-05.
 
 - **CA-28.1** Dada una membresía asignada o renovada, cuando se confirma la operación, entonces se envía de forma asíncrona un email con tipo, inicio y vencimiento al email del alumno.
-- **CA-28.2** Dado un fallo de envío, cuando se reintenta, entonces se envía como máximo un email exitoso por membresía (sin duplicados por reintento).
+- **CA-28.2** Dado que el mismo hecho se entrega más de una vez, cuando el worker lo procesa, entonces existe una única notificación lógica por membresía y tipo. Si SMTP confirma el envío, se registra como ENVIADA; si el resultado queda indeterminado por una caída posterior al envío, un reintento puede producir un email duplicado y el intento queda trazado.
 - **CA-28.3** La operación de asignación/renovación responde sin esperar el envío del email.
 
 #### HU-36 — Avisar el vencimiento de la membresía
@@ -576,9 +577,9 @@ Reglas: RN-26.
 | **RN-01** | **Membresía vigente.** Una membresía es vigente en una fecha F si y solo si su estado es ACTIVA y `fecha_inicio ≤ F ≤ fecha_vencimiento` (fechas calendario, zona S-01). Un alumno "tiene membresía vigente en F" si al menos una de sus membresías es vigente en F. |
 | **RN-02** | **No solapamiento.** Un alumno no puede tener dos membresías ACTIVA con períodos superpuestos. La renovación inicia el día siguiente al vencimiento de la última membresía ACTIVA o, si no hay ninguna ACTIVA, el día en que se renueva. |
 | **RN-03** | **Vencimiento automático.** Al finalizar el día de `fecha_vencimiento`, una membresía ACTIVA pasa a VENCIDA. Ninguna otra transición es automática. |
-| **RN-04** | **Cancelación.** Solo una membresía ACTIVA puede cancelarse, por el administrador y con motivo. Al cancelarla, se cancelan las reservas activas de clases futuras cuya fecha ya no quede cubierta por otra membresía vigente del alumno. |
-| **RN-05** | **Email asíncrono.** Al asignar o renovar una membresía se emite una notificación de email de confirmación que se procesa de forma asíncrona. Un fallo en el envío **no** revierte ni bloquea la membresía; se reintenta con un número acotado de intentos y se registra el resultado. No se envían emails duplicados por la misma membresía. |
-| **RN-41** | **Avisos de vencimiento.** Para cada membresía ACTIVA se envía como máximo un email `RECORDATORIO_VENCIMIENTO` 10 días calendario antes de `fecha_vencimiento` y como máximo un email `ADVERTENCIA_VENCIMIENTO` durante el día de `fecha_vencimiento`, usando `America/Argentina/Buenos_Aires`. La asignación de una renovación no cancela los avisos de la membresía anterior. Los fallos se reintentan sin modificar la membresía. |
+| **RN-04** | **Cancelación.** Solo una membresía ACTIVA puede cancelarse, por el administrador y con motivo. Al cancelarla, se cancelan las reservas activas de clases futuras cuya fecha ya no quede cubierta por otra membresía vigente del alumno. Si una reserva compite con la cancelación, puede confirmarse transitoriamente, pero no puede permanecer CONFIRMADA después de propagarse la cancelación. |
+| **RN-05** | **Email asíncrono.** Al asignar o renovar una membresía se crea una única notificación lógica de confirmación, procesada de forma asíncrona. Un fallo en el envío **no** revierte ni bloquea la membresía; se reintenta con un número acotado de intentos y se registra cada resultado. La deduplicación evita procesar dos veces el mismo hecho, pero SMTP no permite garantizar ausencia absoluta de emails duplicados si el worker cae después de enviar y antes de registrar la confirmación. |
+| **RN-41** | **Avisos de vencimiento.** Para cada membresía ACTIVA se crea una única notificación lógica `RECORDATORIO_VENCIMIENTO` 10 días calendario antes de `fecha_vencimiento` y una única notificación lógica `ADVERTENCIA_VENCIMIENTO` durante el día de `fecha_vencimiento`, usando `America/Argentina/Buenos_Aires`. La asignación de una renovación no cancela los avisos de la membresía anterior. Los fallos se reintentan sin modificar la membresía y con la limitación de entrega SMTP indicada en RN-05. |
 | **RN-06** | **Inmutabilidad de membresías finalizadas.** Una membresía VENCIDA o CANCELADA no cambia de estado ni de fechas. Renovar siempre crea una membresía nueva. |
 
 ### 5.2 Actividades, horarios y clases
@@ -669,7 +670,7 @@ Reglas: RN-26.
 | **Actividad** | id, nombre, descripción, capacidad máxima (50/30), puntos por asistencia (500), estado |
 | **Horario** | id, actividad, día de semana, hora de inicio, duración, franja de 2 horas (solo Musculación), capacidad, profesor responsable, vigente desde/hasta |
 | **Clase** (turno en Musculación) | id, actividad, horario de origen (opcional), fecha, hora de inicio, hora de fin, franja (solo Musculación), capacidad, profesor responsable, estado (PROGRAMADA/EN_CURSO/FINALIZADA/CANCELADA), motivo de cancelación |
-| **Reserva** | id, alumno, clase, fecha-hora de creación, estado (CONFIRMADA/CANCELADA/ASISTIDA/AUSENTE), fecha-hora y motivo de cancelación, clave de idempotencia |
+| **Reserva** | id, alumno, clase, membresía que respaldó la fecha de la clase, fecha-hora de creación, estado (CONFIRMADA/CANCELADA/ASISTIDA/AUSENTE), fecha-hora y motivo de cancelación, clave de idempotencia |
 | **Asistencia** | id, reserva, resultado (ASISTIÓ), origen (ingreso mediante DNI), fecha-hora de ingreso, fecha-hora de registro |
 | **PlanEntrenamiento** | id, alumno, profesional autor, objetivo, vigencia desde, vigencia hasta, observaciones, estado (VIGENTE/FINALIZADO) |
 | **DíaRutina** | id, plan, nombre/orden (ej.: "Día A"), descripción |
@@ -962,7 +963,7 @@ stateDiagram-v2
 - 4a. Solapamiento o fechas inválidas → rechazo.
 - 7a. Fallo de envío → reintentos con espera creciente; si se agotan, FALLIDA y queda visible para el administrador. La membresía no se ve afectada.
 
-**Postcondiciones**: membresía ACTIVA registrada; notificación emitida exactamente una vez.
+**Postcondiciones**: membresía ACTIVA registrada y una única notificación lógica encolada. La entrega del email sigue la garantía de RN-05.
 
 ### CU-05 — Acreditar puntos por asistencia
 
@@ -1096,6 +1097,8 @@ stateDiagram-v2
 | **CL-16** | **El alumno no ingresa.** Clase 19:00–20:00; al finalizar quedan reservas CONFIRMADA. | Pasan automáticamente a AUSENTE y se aplica una penalización de hasta -100 puntos, sin saldo negativo ni regularización manual. | RN-19, RN-38 |
 | **CL-17** | La lectura del DNI ocurre al mismo tiempo que el cierre de la clase. | Gana una sola de las dos operaciones sobre la reserva: o queda ASISTIDA, o queda AUSENTE. Nunca ambas ni puntos duplicados. | RN-19, RN-21 |
 | **CL-18** | El admin cambia el costo de un beneficio mientras un alumno lo canjea. | El canje usa un único costo (el anterior o el nuevo) de forma consistente: el débito y el canje registran el mismo valor. | RN-24 |
+| **CL-19** | La cancelación de una membresía compite con la creación de una reserva para una clase futura cubierta por ella. | La consulta síncrona no forma una transacción distribuida. La reserva puede confirmarse transitoriamente, pero la propagación de la cancelación la rechaza o cancela y libera el cupo; no queda CONFIRMADA indefinidamente. | RN-04, RN-12 |
+| **CL-20** | Benefits está caído cuando se da de alta un alumno. | El alumno queda ACTIVO y el alta no se revierte. El hecho se conserva; al recuperarse benefits se crea una única cuenta con saldo 0. | S-10 |
 
 ---
 
@@ -1107,7 +1110,7 @@ stateDiagram-v2
 
 **Dado** que el administrador da de alta al alumno **A** (DNI y email nuevos)
 **Cuando** se confirma el alta
-**Entonces** A queda ACTIVO y tiene una cuenta de beneficios con saldo **0**.
+**Entonces** A queda ACTIVO sin esperar al Club de Beneficios y, una vez procesado el hecho de alta, tiene una única cuenta de beneficios con saldo **0**.
 
 **Dado** el alumno A sin membresía
 **Cuando** el administrador le asigna una membresía Mensual con inicio 07/10/2026
@@ -1246,7 +1249,7 @@ stateDiagram-v2
 
 ---
 
-## Anexo A — Decisiones confirmadas y actualizaciones (v0.6)
+## Anexo A — Decisiones confirmadas y actualizaciones (v0.7)
 
 | ID | Tema | Decisión | Dónde impacta |
 |---|---|---|---|
@@ -1280,3 +1283,7 @@ Se incorpora el consumo obligatorio de una capacidad publicada por otro grupo, c
 ### Unificación de reglas y criterios — v0.6 (2026-10-07)
 
 Se alinean historias, validaciones, estados, casos de uso y escenarios de aceptación con las decisiones existentes D-04, D-05, D-14 y D-18: 500 puntos por asistencia para todas las actividades, horarios consecutivos permitidos, ingreso mediante DNI y penalización única por ausencia de hasta 100 puntos sin saldo negativo. Se conservan los importes variables de canjes, operaciones de partners y reversiones. Esta revisión no define el orden de movimientos concurrentes, que se resolverá en un paso posterior.
+
+### Garantías entre servicios — v0.7 (2026-10-08)
+
+Se explicitan las garantías posibles entre bases y sistemas independientes: la validación de membresía al reservar es fresca pero no constituye una transacción distribuida; las carreras con cancelaciones convergen mediante propagación asíncrona. La cuenta de beneficios se crea de forma eventual sin bloquear el alta. Las notificaciones se deduplican como efectos lógicos, mientras que SMTP conserva una ventana de posible duplicación ante resultado indeterminado.

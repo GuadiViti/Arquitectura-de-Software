@@ -2,7 +2,7 @@
 
 > Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
 >
-> - Versión: 1.2 (terminología y justificación de patrones internos)
+> - Versión: 1.3 (garantías de consistencia entre servicios)
 > - Fecha: 2026-10-08
 > - Incluye tres decisiones agregadas y aprobadas por el equipo (2026-10-07) para cubrir huecos con el SPEC: eventos `membresia.cancelada` y `usuario.desactivado`, consulta de asignaciones training → members y consulta de datos de alumnos booking → members. Registro completo en [Registro_de_Decisiones_Gimnasio.docx](../Registro_de_Decisiones_Gimnasio.docx) (D-20 a D-23).
 
@@ -62,8 +62,8 @@ Salvo que una sección indique expresamente el estado actual, sus descripciones 
 
 1. **Un servicio, una capacidad, una base.** Ningún servicio lee ni escribe la base de otro (ADR-001, ADR-003).
 2. **Las invariantes fuertes viven dentro de un servicio.** Cupo y reserva están juntos en `booking-service`; saldo y movimientos juntos en `benefits-service`. No hay transacciones distribuidas.
-3. **Síncrono solo cuando la respuesta lo necesita** (verificar membresía vigente antes de reservar). Todo lo demás se propaga con eventos (ADR-005).
-4. **Al menos una vez + idempotencia = efecto exactamente una vez.** Outbox para publicar, deduplicación para consumir.
+3. **Síncrono solo cuando la respuesta lo necesita** (verificar membresía vigente antes de reservar). La consulta es fresca, pero no forma una transacción distribuida; los cambios concurrentes convergen mediante eventos ([ADR-005 v2](adr/ADR-005-v2-comunicacion.md)).
+4. **Entrega al menos una vez + consumo idempotente.** Outbox para publicar y deduplicación para lograr un único efecto durable en la base del consumidor. Los efectos externos no transaccionales, como SMTP, conservan sus propias limitaciones.
 5. **El gateway es la frontera de confianza.** Los servicios confían en `X-User-Id` / `X-User-Role` porque solo el gateway puede llegar a ellos.
 
 ---
@@ -195,7 +195,7 @@ flowchart LR
 
 - **Por qué capas:** sus flujos son mayormente altas, modificaciones y consultas con reglas acotadas (solapamiento de membresías, unicidad de DNI/email). La separación `handler → service → repository`, con interfaces requeridas por `service`, mantiene la lógica aislada de Gin y pgx sin incorporar todos los puertos y adaptadores explícitos del patrón hexagonal. Ver [ADR-002 v2](adr/ADR-002-v2-patrones-internos.md).
 - **Reglas SPEC que implementa:** RN-01 a RN-06, RN-30 (parcial), RN-33, RN-34.
-- **API interna** (no expuesta por el gateway): `GET /internal/v1/alumnos/{id}/vigencia?fechas=2026-10-07,2026-10-09` → `{vigente_hoy, vigente_en: {fecha: bool}}`; `GET /internal/v1/alumnos?ids=…` (datos mínimos para listados); `GET /internal/v1/asignaciones?profesional_id=…&alumno_id=…`.
+- **API interna** (no expuesta por el gateway): `GET /internal/v1/alumnos/{id}/vigencia?fechas=2026-10-07,2026-10-09` → `{vigente_hoy, vigente_en: {fecha: {vigente, membresia_id}}, evaluado_en}`; `GET /internal/v1/alumnos?ids=…` (datos mínimos para listados); `GET /internal/v1/asignaciones?profesional_id=…&alumno_id=…`.
 - **Procesos programados:** generación diaria de avisos de vencimiento y vencimiento de membresías (America/Argentina/Buenos_Aires), además del relay del outbox.
 - **JWT:** firma RS256 con clave privada propia; el gateway solo tiene la clave pública. Vida corta (15 min).
 
@@ -207,6 +207,7 @@ flowchart LR
 - **Adaptadores de entrada:** handlers HTTP con Gin y consumidores AMQP; traducen la interacción externa y llaman a los puertos de entrada.
 - **CQRS de lectura:** las búsquedas de clases disponibles (`GET /clases?actividad=&fecha=`) se resuelven en OpenSearch; **toda escritura y toda validación** (cupo, duplicados, superposición) se hacen contra PostgreSQL. La ocupación mostrada en listados es eventualmente consistente; la reserva nunca lo es.
 - **Concurrencia del cupo (RN-14):** actualización condicional atómica sobre la clase (`ocupacion < capacidad`) o bloqueo de fila, en la misma transacción que inserta la reserva. Restricciones únicas parciales para "una reserva CONFIRMADA por alumno y clase". Detalle en ADR-003.
+- **Cancelaciones concurrentes de membresía:** cada reserva conserva `membresia_id`; booking registra las revocaciones consumidas. La creación de reservas y el consumidor se serializan con `pg_advisory_xact_lock` sobre esa membresía, conforme a ADR-005 v2.
 - **2 instancias detrás de Traefik:** sin estado en memoria. Los procesos programados (marcar ausencias al finalizar clases, relay del outbox) se coordinan con `pg_advisory_lock` / `FOR UPDATE SKIP LOCKED` para no ejecutarse dos veces.
 - **Binarios:** `cmd/api` (HTTP + consumidor) y `cmd/indexer` (booking-indexer). Mismo módulo, mismo dominio de lectura.
 
@@ -214,7 +215,7 @@ flowchart LR
 
 - **Por qué hexagonal:** es la capacidad publicada a otros grupos; su contrato (API v1) debe mantenerse estable aunque cambie la infraestructura, y el ledger tiene invariantes estrictas (RN-22 a RN-27).
 - **Ledger:** `movimientos_puntos` es append-only; el saldo se mantiene en `cuentas.saldo` actualizado en la misma transacción que inserta el movimiento, con `CHECK (saldo >= 0)`. La reversión inserta un movimiento compensatorio.
-- **Cuentas:** se crea exactamente una cuenta con saldo 0 cuando `members-service` confirma el alta del alumno. `members-service` publica `alumno.creado` mediante outbox y `benefits-service` consume el evento de forma idempotente. No se crean cuentas para personas que no sean alumnos; una vinculación o una operación posterior nunca crea una cuenta por sí sola.
+- **Cuentas:** el alta confirmada en `members-service` registra `alumno.creado` mediante outbox; `benefits-service` consume el evento y crea eventualmente una única cuenta con saldo 0. El alta no espera ni se revierte si benefits está caído. No se crean cuentas para personas que no sean alumnos; una vinculación o una operación posterior nunca crea una cuenta por sí sola.
 - **API v1 de partners:** `/partner-api/v1/...` con API key (`X-API-Key`, guardada como hash) e `Idempotency-Key` obligatorio en escrituras. Contrato publicado: [docs/contracts/benefits-api.v1.yaml](contracts/benefits-api.v1.yaml) (OpenAPI 3.1, v1.0.0), guía para consumidores en [docs/contracts/README.md](contracts/README.md) y decisión en [ADR-008](adr/ADR-008-contrato-propio.md). Las rutas públicas son `/partner-api/v1/accounts/{externalUserId}/...` y usan inglés y `camelCase` (excepción a §12.2).
 - **Idempotencia de asistencia e inasistencia:** restricciones únicas sobre `movimientos_puntos.origen_asistencia_id` y `movimientos_puntos.origen_reserva_id` además del registro de mensajes procesados. La penalización se calcula como `min(100, saldo_actual)` dentro de la transacción.
 
@@ -228,6 +229,7 @@ flowchart LR
 
 - Consume eventos de membresía, arma el email correspondiente con los datos que trae el evento (no consulta a members) y lo envía por SMTP. Los eventos de recordatorio y advertencia incluyen una clave única por membresía y tipo para evitar duplicados.
 - Registra en `notifications_db.mensajes` cada `event_id` con estado `PROCESANDO → ENVIADO | FALLIDO`; índice único por `event_id`.
+- La deduplicación garantiza una única notificación lógica. SMTP no permite atomicidad entre enviar y guardar `ENVIADO`: una caída en esa ventana puede producir un email duplicado al reintentar ([ADR-005 v2](adr/ADR-005-v2-comunicacion.md)).
 - Expone `:8085` solo para `/health` y `/metrics`.
 
 ---
@@ -290,6 +292,8 @@ El rate limiting **falla abierto** (deja pasar y registra métrica `ratelimit_re
 | training | members | ¿Alumno asignado al profesional? (RN-30) | Autorización | 800 ms | 1 + caché Redis 60 s | Falla cerrado: `503` |
 | benefits | members | Validar alumno al vincularlo a un partner | Validación de alta | 800 ms | 1 | `503`; el admin reintenta |
 | notification-worker | SMTP | Envío de email | Protocolo SMTP | 10 s | Vía colas de reintento | Reintento → DLQ |
+
+La validación booking → members usa datos frescos, pero no es una transacción entre servicios. Members devuelve la membresía que cubre la fecha de la clase y booking la guarda con la reserva. La creación de la reserva y el consumo de `membresia.cancelada` usan el mismo bloqueo transaccional por `membresia_id` dentro de booking: el consumidor registra una revocación durable y cancela las reservas afectadas, o la inserción posterior detecta la revocación y se rechaza. El estado converge aunque una reserva pueda quedar confirmada transitoriamente durante la propagación. Ver [ADR-005 v2](adr/ADR-005-v2-comunicacion.md).
 
 ### 6.2 Asíncronas (RabbitMQ, exchange `gym.events`)
 
@@ -658,10 +662,10 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | # | Limitación | Impacto | Mitigación prevista |
 |---|---|---|---|
 | L-01 | **Una sola instancia de PostgreSQL** para tres bases. | Punto único de falla y recursos compartidos; aislamiento lógico, no físico. | Usuarios y permisos por base; ninguna consulta cruzada. Separar instancias es cambiar DSN. |
-| L-02 | **Dependencia síncrona booking → members** para reservar. | Si members cae, no se puede reservar (falla cerrado). | Timeout corto, circuit breaker, health checks; alternativa futura: réplica local de vigencias vía eventos. |
+| L-02 | **Dependencia síncrona booking → members** para reservar y carrera con una cancelación concurrente. | Si members cae, no se reserva. Una reserva puede confirmarse transitoriamente mientras se propaga una cancelación. | Timeout y circuit breaker; guardar la membresía de respaldo; evento de cancelación, revocación local y bloqueo transaccional compartido por membresía para converger y liberar el cupo. |
 | L-03 | **Ocupación eventualmente consistente** en los listados (OpenSearch). | Un listado puede mostrar "1 disponible" cuando ya no hay. | La reserva valida contra Postgres y devuelve `SIN_CUPO`; lag objetivo < 2 s. |
 | L-04 | **Puntos por asistencia con demora** (asincrónicos). | El alumno puede no ver los puntos inmediatamente. | Lag objetivo < 5 s; reintentos + DLQ monitoreada. |
-| L-05 | **Email al menos una vez.** SMTP no es transaccional: si el worker muere entre enviar y registrar, el email puede duplicarse. | Contradice parcialmente "sin duplicados" (RN-05) en un escenario de falla raro. | Estado `PROCESANDO` antes de enviar; ventana mínima. Riesgo aceptado. |
+| L-05 | **Entrega de email no transaccional.** Si el worker muere entre enviar por SMTP y registrar `ENVIADO`, el reintento puede duplicar el correo. | El alumno puede recibir más de una copia en una ventana de falla. | Una notificación lógica por membresía/tipo, trazabilidad de intentos y riesgo explícito en RN-05 y ADR-005 v2. |
 | L-06 | **Gateway, Redis, RabbitMQ y OpenSearch en instancia única.** | Puntos únicos de falla. | Aceptado para el alcance del TP; booking es el único servicio replicado para demostrar balanceo. |
 | L-07 | **JWT sin revocación.** Un usuario dado de baja conserva acceso hasta que vence el token. | Hasta 15 min de acceso residual. | Vida corta; los servicios verifican estado ACTIVO en operaciones sensibles. |
 | L-08 | **Confianza por red interna** (sin mTLS entre servicios). | Quien entre a la red interna puede falsificar identidad. | Puertos internos no publicados fuera de dev. |
@@ -687,6 +691,7 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | [ADR-002 v2](adr/ADR-002-v2-patrones-internos.md) | D2 — Capas y Hexagonal; precisión de dependencias, puertos y adaptadores | Aceptado |
 | [ADR-003](adr/ADR-003-persistencia.md) | D3 — Persistencia por servicio (versión inicial) | Aceptado |
 | ADR-004 | D4 — *reservado* | — |
-| [ADR-005](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona (versión inicial) | Aceptado |
+| [ADR-005 original](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona | Reemplazado por ADR-005 v2 |
+| [ADR-005 v2](adr/ADR-005-v2-comunicacion.md) | D5 — Comunicación y garantías entre servicios | Aceptado |
 | ADR-006, ADR-007 | D6, D7 — *reservados* | — |
 | [ADR-008](adr/ADR-008-contrato-propio.md) | D8 — Contrato propio: API de fidelización v1 | Aceptado |
