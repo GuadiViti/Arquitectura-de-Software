@@ -3,7 +3,7 @@
 > Especificación funcional del Trabajo Práctico Integrador de Arquitectura de Software (microservicios).
 > Este documento es la **referencia funcional** durante todo el desarrollo. No define tecnologías, lenguajes, frameworks ni modelos de base de datos.
 >
-> - Versión: 0.4 (decisiones D-01…D-19 confirmadas)
+> - Versión: 0.5 (alcance actualizado para incluir el consumo de una capacidad externa)
 > - Fecha: 2026-10-07
 > - Convenciones: `HU-xx` = historia de usuario, `RN-xx` = regla de negocio, `CU-xx` = caso de uso, `CL-xx` = caso límite, `E2E-xx` = criterio de aceptación de punta a punta. Las palabras **DEBE**, **NO DEBE** y **PUEDE** tienen sentido normativo.
 
@@ -32,6 +32,8 @@
 
 Construir un sistema que permita a un gimnasio administrar de forma integral a sus alumnos, profesionales, membresías, actividades, clases y reservas; acompañar el seguimiento de entrenamiento y nutrición de cada alumno; y fidelizarlos mediante un **Club de Beneficios** basado en puntos que, además, se expone a sistemas de terceros (**partners**) a través de una API pública.
 
+El sistema también DEBE consumir una capacidad publicada por otro grupo e integrarla en un flujo relevante del negocio, conforme al enunciado del TP. La capacidad concreta y el flujo afectado quedan pendientes de la asignación del proveedor (ver §1.5).
+
 ### 1.2 Alcance
 
 Dentro del alcance de esta especificación:
@@ -48,6 +50,7 @@ Dentro del alcance de esta especificación:
 | Nutrición | Planes alimenticios, mediciones corporales (historial inmutable) y consultas de los alumnos a su nutricionista. |
 | Club de Beneficios | Cuenta de puntos, saldo, movimientos, catálogo de beneficios, canjes, acreditación automática por asistencia. |
 | API pública para partners | Acreditar, debitar, canjear, consultar saldo y movimientos de las cuentas vinculadas al partner, con idempotencia. |
+| Consumo de una capacidad externa | Integrar una capacidad publicada por otro grupo en un flujo relevante de METALFITNESS. Proveedor, capacidad y flujo concreto pendientes de definición (ver §1.5). |
 | Notificaciones | Email de confirmación de membresía asignada o renovada, recordatorio 10 días antes del vencimiento y advertencia el día del vencimiento (asíncronos). |
 
 ### 1.3 Fuera de alcance
@@ -64,7 +67,6 @@ Dentro del alcance de esta especificación:
 - Reportes estadísticos y tableros de gestión.
 - Gestión de salas/espacios físicos y equipamiento.
 - Multi-sede (se asume una única sede).
-- Prestaciones del partner hacia nuestros alumnos (solo exponemos nuestra API; no consumimos la de ellos).
 
 ### 1.4 Supuestos
 
@@ -86,6 +88,19 @@ Dentro del alcance de esta especificación:
 | S-14 | Las bajas de alumnos, profesionales, actividades y beneficios son **lógicas** (se inactivan, no se borran) para preservar la trazabilidad. |
 | S-15 | El partner y el sistema comparten la noción de **identificador de operación** (clave de idempotencia) que el partner genera y envía en cada operación de escritura. |
 | S-16 | Los **nutricionistas no dictan clases ni arman planes de entrenamiento**: cargan planes alimenticios, registran mediciones y responden consultas de sus pacientes. Las clases y los planes de entrenamiento son exclusivos de los **profesores**. |
+
+### 1.5 Integración externa requerida — definiciones pendientes
+
+El alcance incluye ambas responsabilidades: **ofrecer** la API del Club de Beneficios y **consumir** una capacidad de otro grupo. La integración de consumo es obligatoria; lo pendiente es su definición concreta, no su inclusión en el proyecto.
+
+| Aspecto | Estado |
+|---|---|
+| Grupo proveedor y capacidad asignada | Pendiente de asignación y coordinación con el grupo proveedor. |
+| Flujo de negocio y actores afectados | Pendiente de conocer la capacidad; su uso DEBE formar parte de un flujo relevante del sistema. |
+| Reglas, datos intercambiados y criterios de aceptación | Pendientes del contrato del proveedor y de la definición del flujo. Se incorporarán a las HU, RN y escenarios correspondientes. |
+| Resultado ante indisponibilidad o errores del proveedor | Pendiente de definir según el flujo; deberá documentarse y comprobarse con escenarios de fallo. |
+
+La elección del microservicio consumidor y los detalles técnicos se documentarán en `docs/ARCHITECTURE.md` y en la decisión D9 del TP cuando se defina la integración. Esta sección no asigna un proveedor, una capacidad ni un servicio responsable.
 
 ---
 
@@ -1216,7 +1231,7 @@ stateDiagram-v2
 
 ---
 
-## Anexo A — Decisiones confirmadas (v0.4)
+## Anexo A — Decisiones confirmadas y actualización de alcance (v0.5)
 
 | ID | Tema | Decisión | Dónde impacta |
 |---|---|---|---|
@@ -1242,3 +1257,7 @@ stateDiagram-v2
 | D-19 | Tipos de membresía iniciales | Mensual (1 mes), Trimestral (3 meses) y Anual (12 meses). | Glosario, HU-03 |
 
 | D-32 | Avisos de vencimiento de membresía | METALFITNESS envía al alumno un recordatorio 10 días calendario antes del vencimiento y una advertencia durante el día del vencimiento. Los envíos son asíncronos, idempotentes por membresía y tipo, y no dependen del partner externo. | RN-41, HU-36 |
+
+### Actualización de alcance — v0.5 (2026-10-07)
+
+Se incorpora el consumo obligatorio de una capacidad publicada por otro grupo, conforme al enunciado del TP, y se elimina la exclusión que lo impedía. El proveedor, la capacidad y el flujo concreto quedan pendientes de definición en §1.5. Esta actualización afecta el objetivo y el alcance (§1.1–1.3); no selecciona tecnologías ni modifica los ADR aceptados.
