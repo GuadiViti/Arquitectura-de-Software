@@ -3,7 +3,7 @@
 > Especificación funcional del Trabajo Práctico Integrador de Arquitectura de Software (microservicios).
 > Este documento es la **referencia funcional** durante todo el desarrollo. No define tecnologías, lenguajes, frameworks ni modelos de base de datos.
 >
-> - Versión: 0.5 (alcance actualizado para incluir el consumo de una capacidad externa)
+> - Versión: 0.6 (reglas y criterios de aceptación unificados)
 > - Fecha: 2026-10-07
 > - Convenciones: `HU-xx` = historia de usuario, `RN-xx` = regla de negocio, `CU-xx` = caso de uso, `CL-xx` = caso límite, `E2E-xx` = criterio de aceptación de punta a punta. Las palabras **DEBE**, **NO DEBE** y **PUEDE** tienen sentido normativo.
 
@@ -116,7 +116,7 @@ La elección del microservicio consumidor y los detalles técnicos se documentar
 | **Alumno asignado** | Alumno vinculado a un profesional por el administrador para seguimiento (planes, mediciones, consultas). |
 | **Paciente** | Alumno asignado a un nutricionista. |
 | **Consulta nutricional** | Duda que un alumno envía a su nutricionista y que este responde dentro del sistema. |
-| **Actividad** | Disciplina ofrecida por el gimnasio (Musculación, Funcional, GAP, Strong Nation, Zumba). Define capacidad máxima y puntos por asistencia. |
+| **Actividad** | Disciplina ofrecida por el gimnasio (Musculación, Funcional, GAP, Strong Nation, Zumba). Define capacidad máxima; cada asistencia otorga el valor fijo de 500 puntos establecido en RN-20. |
 | **Horario** | Plantilla recurrente de una actividad: día de la semana, hora de inicio, duración, capacidad y profesor responsable. A partir de los horarios se generan clases. |
 | **Clase** | Instancia concreta de una actividad en una fecha y hora determinadas, con capacidad y un profesor responsable. Es lo que se reserva. |
 | **Turno** | Nombre que recibe una clase de **Musculación**: una de las 7 franjas diarias de 2 horas dentro de 08:00–23:00, con capacidad máxima 50. A efectos del sistema, un turno **es** una clase. |
@@ -168,7 +168,7 @@ La elección del microservicio consumidor y los detalles técnicos se documentar
 - **Asignar y desasignar alumnos** a profesionales.
 - Gestionar **tipos de membresía** (nombre, duración por defecto).
 - **Asignar, renovar y cancelar membresías**; consultar el historial de membresías de un alumno.
-- Gestionar **actividades**: alta, modificación, inactivación; configurar capacidad máxima y puntos por asistencia.
+- Gestionar **actividades**: alta, modificación, inactivación; configurar capacidad máxima. Los puntos por asistencia son fijos (500, RN-20).
 - Gestionar **horarios** recurrentes (día, hora, duración, capacidad, profesor responsable) y **generar clases**.
 - Modificar **capacidad** y **profesor responsable** de una clase concreta; **cancelar clases**.
 - Consultar clases con su ocupación y listado de reservas.
@@ -286,6 +286,7 @@ Reglas: RN-07, RN-08, RN-20.
 - **CA-06.1** Dado el sistema recién instalado, cuando se consulta el catálogo de actividades, entonces existen Musculación (máx. 50, 500 puntos), Funcional, GAP, Strong Nation y Zumba (máx. 30, 500 puntos).
 - **CA-06.2** Dada una actividad, cuando se intenta configurar una capacidad máxima mayor al tope (50 Musculación / 30 resto), entonces se rechaza.
 - **CA-06.3** Dada una actividad con clases futuras con reservas, cuando se inactiva, entonces se rechaza hasta que las clases futuras se cancelen.
+- **CA-06.4** Dada cualquier actividad, cuando se intenta configurar un valor de puntos por asistencia distinto de 500, entonces se rechaza conforme a RN-20.
 
 #### HU-07 — Configurar horarios y generar clases
 *Como administrador, quiero definir horarios recurrentes y generar las clases, para que los alumnos puedan reservar.*
@@ -374,8 +375,8 @@ Reglas: RN-01, RN-12, RN-13, RN-14, RN-15, RN-16, RN-39, RN-40.
 - **CA-14.8** Dado un único lugar disponible y dos alumnos que reservan simultáneamente, cuando se procesan, entonces exactamente uno obtiene la reserva y el otro recibe "sin cupo"; la ocupación nunca supera la capacidad.
 - **CA-14.9** Dado un alumno con reserva CONFIRMADA en el turno 08:00–10:00 de Musculación del 09/10, cuando intenta reservar el turno 16:00–18:00 del 09/10, entonces se rechaza con el motivo "ya tiene un turno de Musculación ese día".
 - **CA-14.10** Dado el caso anterior, cuando el alumno cancela el turno 08:00–10:00 y luego reserva el turno 16:00–18:00, entonces la reserva se acepta.
-- **CA-14.11** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00, cuando intenta reservar Funcional de 19:30 a 20:30 o el turno de Musculación de 20:00 a 22:00, entonces se rechaza con el motivo "superposición con otra reserva".
-- **CA-14.12** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00, cuando reserva GAP de 20:00 a 21:00, entonces se acepta (no hay superposición).
+- **CA-14.11** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00, cuando intenta reservar Funcional de 19:30 a 20:30 o el turno de Musculación de 18:00 a 20:00, entonces se rechaza con el motivo "superposición con otra reserva".
+- **CA-14.12** Dado un alumno con reserva CONFIRMADA en Zumba de 19:00 a 20:00 y que cumple las demás condiciones de RN-12, cuando reserva GAP de 20:00 a 21:00 o, como alternativa, Musculación de 20:00 a 22:00, entonces se acepta (los horarios consecutivos no se superponen).
 
 #### HU-15 — Cancelar una reserva
 *Como alumno, quiero cancelar una reserva, para liberar el lugar si no puedo ir.*
@@ -444,7 +445,7 @@ Reglas: RN-30.
 
 #### HU-22 — Registrar ingreso y asistencia automáticamente
 *Como alumno, quiero ingresar al gimnasio con mi DNI, para que el sistema registre automáticamente mi asistencia a la clase reservada.*
-Reglas: RN-19, RN-20, RN-21.
+Reglas: RN-19, RN-20, RN-21, RN-38.
 
 - **CA-22.1** Dada una clase iniciada de Funcional y una reserva CONFIRMADA, cuando el alumno ingresa su DNI, entonces el sistema valida su membresía, crea la asistencia, pasa la reserva a ASISTIDA y acredita +500 puntos una única vez.
 - **CA-22.2** Dada una clase iniciada de Musculación, cuando el alumno ingresa su DNI, entonces se registra la asistencia y se acreditan +500 puntos.
@@ -453,7 +454,11 @@ Reglas: RN-19, RN-20, RN-21.
 - **CA-22.5** Dada una clase futura, cuando el alumno intenta registrar su ingreso para esa clase, entonces se rechaza.
 - **CA-22.6** Dada una reserva CANCELADA o ya ASISTIDA, cuando se procesa nuevamente el DNI, entonces no se crea una nueva asistencia ni se acreditan puntos otra vez.
 - **CA-22.7** Dado un DNI inexistente, cuando se intenta ingresar, entonces se rechaza sin revelar datos de otros alumnos.
-- **CA-22.8** Dada una reserva CONFIRMADA que llega al final de la clase sin ingreso registrado, entonces la reserva pasa automáticamente a AUSENTE y no se acreditan puntos.
+- **CA-22.8** Dada una reserva CONFIRMADA que llega al final de la clase sin ingreso registrado, entonces la reserva pasa automáticamente a AUSENTE, no se acreditan puntos por asistencia y se genera una penalización de hasta 100 puntos, aplicada una única vez y sin dejar saldo negativo (RN-38).
+- **CA-22.9** Dada una ausencia pendiente de penalización y un saldo de 500, sin otros movimientos concurrentes, cuando se procesa la penalización, entonces se descuentan 100 puntos y el saldo queda en 400.
+- **CA-22.10** Dada una ausencia pendiente de penalización y un saldo de 50, sin otros movimientos concurrentes, cuando se procesa la penalización, entonces se descuentan 50 puntos y el saldo queda en 0.
+- **CA-22.11** Dada una ausencia pendiente de penalización y saldo 0, sin otros movimientos concurrentes, cuando se procesa la penalización, entonces el saldo permanece en 0 y la ausencia queda procesada para impedir que una reentrega la penalice después.
+- **CA-22.12** Dada una ausencia cuya penalización ya se procesó, cuando el mismo hecho se entrega nuevamente, entonces no se aplica otro descuento, aunque el saldo haya cambiado.
 
 #### HU-23 — Gestionar plan de entrenamiento
 *Como profesor, quiero crear y actualizar el plan de entrenamiento de mis alumnos, para guiar su progreso.*
@@ -496,7 +501,7 @@ Reglas: RN-30, RN-37.
 *Como proceso automático del sistema, quiero acreditar puntos ante cada asistencia confirmada, para premiar la constancia.*
 Reglas: RN-20, RN-21, RN-22.
 
-- **CA-26.1** Dada una asistencia ASISTIÓ de Zumba, cuando se procesa, entonces se crea un movimiento CONFIRMADO de +10 con motivo "Asistencia Zumba <fecha hora>" vinculado a esa asistencia.
+- **CA-26.1** Dada una asistencia ASISTIÓ de Zumba, cuando se procesa, entonces se crea un movimiento CONFIRMADO de +500 con motivo "Asistencia Zumba <fecha hora>" vinculado a esa asistencia. El mismo valor de 500 puntos corresponde a cualquier actividad (RN-20).
 - **CA-26.2** Dado que el evento de asistencia se entrega dos veces, cuando se procesa por segunda vez, entonces no se crea un segundo movimiento.
 - **CA-26.3** Dado que el Club de Beneficios no está disponible al registrar la asistencia, cuando vuelve a estar disponible, entonces la acreditación se realiza (consistencia eventual), sin perder ni duplicar puntos.
 
@@ -725,7 +730,7 @@ erDiagram
 Notas:
 - Una **Clase** de Musculación es un **turno**; no se modela una entidad distinta.
 - La **Asistencia** referencia a la **Reserva** (y por ella al alumno y la clase). Una reserva tiene 0 o 1 asistencia.
-- Un **MovimientoPuntos** tiene exactamente un origen: una asistencia, un canje, una operación de partner o una acción de administrador (reversión).
+- Un **MovimientoPuntos** tiene exactamente un origen: una asistencia, una inasistencia, un canje, una operación de partner o una acción de administrador (reversión).
 - Una **CuentaBeneficios** pertenece siempre a un alumno. Los partners solo operan sobre cuentas de alumnos vinculadas a ellos.
 - **Clase**, **Horario** y **PlanEntrenamiento** se relacionan solo con profesionales de subtipo PROFESOR; **PlanAlimenticio**, **Medición** y **ConsultaNutricional**, solo con NUTRICIONISTA.
 
@@ -818,7 +823,7 @@ stateDiagram-v2
 | ASISTIDA | AUSENTE (o viceversa) | Cambiar resultado | ❌ |
 | ASISTIDA / AUSENTE | CANCELADA | Cancelar | ❌ |
 
-> Solo CONFIRMADA ocupa cupo. AUSENTE no genera puntos.
+> Solo CONFIRMADA ocupa cupo. AUSENTE no acredita puntos por asistencia: genera una penalización de hasta 100 puntos, aplicada una única vez y sin saldo negativo (RN-38).
 
 ### 7.4 Movimiento de puntos
 
@@ -912,14 +917,14 @@ stateDiagram-v2
 |---|---|
 | Disparador | Alumno que ingresa su DNI en el acceso del gimnasio |
 | Precondiciones | Alumno ACTIVO, membresía vigente y reserva CONFIRMADA en una clase EN_CURSO. |
-| Reglas | RN-19, RN-20, RN-21 |
+| Reglas | RN-19, RN-20, RN-21, RN-38 |
 
 **Flujo principal**
 1. El alumno ingresa su DNI en el dispositivo o puesto de acceso.
 2. El sistema busca al alumno y verifica que esté ACTIVO y tenga membresía vigente.
 3. El sistema busca sus reservas CONFIRMADA en clases EN_CURSO.
 4. Si encuentra una única reserva válida, crea la Asistencia automática y pasa la reserva a ASISTIDA.
-5. El sistema publica el hecho "asistencia confirmada" con el alumno, la clase y los puntos de la actividad.
+5. El sistema publica el hecho "asistencia confirmada" con el alumno, la clase y el valor fijo de 500 puntos (RN-20).
 6. El sistema confirma el ingreso sin exponer datos personales en pantalla.
 
 **Alternativos**
@@ -930,9 +935,11 @@ stateDiagram-v2
 - 4b. Reserva CANCELADA o AUSENTE → rechazo por transición inválida.
 
 **Flujo de cierre de clase (sistema)**
-- C1. Al finalizar la clase, el sistema pasa a AUSENTE todas sus reservas que siguen CONFIRMADA. No se generan puntos.
+- C1. Al finalizar la clase, el sistema pasa a AUSENTE todas sus reservas que siguen CONFIRMADA sin ingreso registrado.
+- C2. Por cada ausencia, genera el hecho que permite aplicar la penalización de hasta 100 puntos conforme a RN-38. No se acreditan puntos por asistencia.
+- C3. El Club de Beneficios procesa cada ausencia una única vez y aplica el descuento sin dejar saldo negativo.
 
-**Postcondiciones**: a lo sumo una Asistencia por reserva; por cada ASISTIÓ queda un hecho publicado que dispara CU-05.
+**Postcondiciones**: a lo sumo una Asistencia por reserva; por cada ASISTIÓ queda un hecho publicado que dispara CU-05. En el cierre, cada reserva que pasa a AUSENTE genera el hecho correspondiente a su penalización según RN-38.
 
 ### CU-04 — Activar (asignar/renovar) membresía
 
@@ -1036,7 +1043,7 @@ stateDiagram-v2
 | **Asignar membresía** | Alumno ACTIVO; tipo ACTIVO; inicio ≥ hoy; vencimiento ≥ inicio; sin solapamiento con otra ACTIVA. | Datos inválidos / solapamiento |
 | **Renovar membresía** | Igual que asignar; inicio calculado según RN-02. | Solapamiento |
 | **Cancelar membresía** | Estado ACTIVA; motivo obligatorio. | Transición inválida |
-| **Alta/modificación de actividad** | Nombre único; capacidad máxima ≤ tope (50 Musculación / 30 resto) y ≥ 1; puntos por asistencia ≥ 0 entero. | Datos inválidos |
+| **Alta/modificación de actividad** | Nombre único; capacidad máxima ≤ tope (50 Musculación / 30 resto) y ≥ 1; puntos por asistencia fijos en 500 (RN-20), no configurables por actividad. | Datos inválidos |
 | **Alta de horario / clase** | Actividad ACTIVA; responsable PROFESOR ACTIVO (no nutricionista); capacidad 1..máximo; duración > 0; Musculación solo en una de las 7 franjas de 2 horas (08:00–10:00, 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00); sin superposición para el profesor; sin clase duplicada (actividad + inicio). | Datos inválidos / responsable inválido / superposición / duplicado |
 | **Modificar capacidad de clase** | Clase PROGRAMADA; nueva capacidad ≥ ocupación y ≤ máximo. | Capacidad inválida |
 | **Cancelar clase** | Clase PROGRAMADA (no iniciada); motivo obligatorio. | Transición inválida |
@@ -1175,7 +1182,13 @@ stateDiagram-v2
 
 **Dado** que A tiene reserva CONFIRMADA en el turno de Musculación de 20:00–22:00 del 09/10 y no ingresa su DNI
 **Cuando** finaliza la clase
-**Entonces** la reserva pasa a AUSENTE y A no recibe puntos.
+**Entonces** la reserva pasa a AUSENTE y no se acreditan puntos por asistencia.
+**Dado** que el saldo de A es 500 antes de procesar la penalización y no hay otros movimientos concurrentes
+**Cuando** el Club de Beneficios procesa la ausencia
+**Entonces** aplica un descuento de 100 y el saldo queda en 400.
+**Cuando** se vuelve a procesar la misma ausencia
+**Entonces** el saldo sigue en 400, sin otro descuento.
+**Variantes independientes:** si el saldo previo es 50, se descuentan 50 y queda en 0; si es 0, permanece en 0. En ambos casos, la ausencia queda procesada y una reentrega no genera nuevos descuentos.
 
 ### E2E-08 — Consulta nutricional
 
@@ -1184,8 +1197,10 @@ stateDiagram-v2
 **Entonces** queda PENDIENTE y N la ve en su bandeja.
 **Cuando** N responde
 **Entonces** la consulta pasa a RESPONDIDA y A ve la respuesta.
-**Cuando** N intenta crear un plan de entrenamiento o registrar un ingreso
-**Entonces** se rechaza (solo los profesores pueden).
+**Cuando** N intenta crear un plan de entrenamiento
+**Entonces** se rechaza: esa función corresponde a profesores con alumnos asignados.
+**Cuando** un profesional intenta registrar manualmente la asistencia de un alumno
+**Entonces** se rechaza: la asistencia se registra automáticamente a partir del ingreso del alumno mediante DNI (RN-19), no por una acción manual del profesor o nutricionista.
 
 ---
 
@@ -1231,7 +1246,7 @@ stateDiagram-v2
 
 ---
 
-## Anexo A — Decisiones confirmadas y actualización de alcance (v0.5)
+## Anexo A — Decisiones confirmadas y actualizaciones (v0.6)
 
 | ID | Tema | Decisión | Dónde impacta |
 |---|---|---|---|
@@ -1261,3 +1276,7 @@ stateDiagram-v2
 ### Actualización de alcance — v0.5 (2026-10-07)
 
 Se incorpora el consumo obligatorio de una capacidad publicada por otro grupo, conforme al enunciado del TP, y se elimina la exclusión que lo impedía. El proveedor, la capacidad y el flujo concreto quedan pendientes de definición en §1.5. Esta actualización afecta el objetivo y el alcance (§1.1–1.3); no selecciona tecnologías ni modifica los ADR aceptados.
+
+### Unificación de reglas y criterios — v0.6 (2026-10-07)
+
+Se alinean historias, validaciones, estados, casos de uso y escenarios de aceptación con las decisiones existentes D-04, D-05, D-14 y D-18: 500 puntos por asistencia para todas las actividades, horarios consecutivos permitidos, ingreso mediante DNI y penalización única por ausencia de hasta 100 puntos sin saldo negativo. Se conservan los importes variables de canjes, operaciones de partners y reversiones. Esta revisión no define el orden de movimientos concurrentes, que se resolverá en un paso posterior.
