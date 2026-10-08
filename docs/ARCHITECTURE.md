@@ -2,7 +2,7 @@
 
 > Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
 >
-> - Versión: 1.1 (arquitectura objetivo y estado implementado)
+> - Versión: 1.2 (terminología y justificación de patrones internos)
 > - Fecha: 2026-10-08
 > - Incluye tres decisiones agregadas y aprobadas por el equipo (2026-10-07) para cubrir huecos con el SPEC: eventos `membresia.cancelada` y `usuario.desactivado`, consulta de asignaciones training → members y consulta de datos de alumnos booking → members. Registro completo en [Registro_de_Decisiones_Gimnasio.docx](../Registro_de_Decisiones_Gimnasio.docx) (D-20 a D-23).
 
@@ -193,7 +193,7 @@ flowchart LR
 
 #### members-service — Capas
 
-- **Por qué capas:** lógica mayormente CRUD con reglas acotadas (solapamiento de membresías, unicidad de DNI/email). Una arquitectura hexagonal agregaría indirección sin beneficio.
+- **Por qué capas:** sus flujos son mayormente altas, modificaciones y consultas con reglas acotadas (solapamiento de membresías, unicidad de DNI/email). La separación `handler → service → repository`, con interfaces requeridas por `service`, mantiene la lógica aislada de Gin y pgx sin incorporar todos los puertos y adaptadores explícitos del patrón hexagonal. Ver [ADR-002 v2](adr/ADR-002-v2-patrones-internos.md).
 - **Reglas SPEC que implementa:** RN-01 a RN-06, RN-30 (parcial), RN-33, RN-34.
 - **API interna** (no expuesta por el gateway): `GET /internal/v1/alumnos/{id}/vigencia?fechas=2026-10-07,2026-10-09` → `{vigente_hoy, vigente_en: {fecha: bool}}`; `GET /internal/v1/alumnos?ids=…` (datos mínimos para listados); `GET /internal/v1/asignaciones?profesional_id=…&alumno_id=…`.
 - **Procesos programados:** generación diaria de avisos de vencimiento y vencimiento de membresías (America/Argentina/Buenos_Aires), además del relay del outbox.
@@ -203,7 +203,8 @@ flowchart LR
 
 - **Por qué hexagonal:** concentra las reglas más críticas del SPEC (RN-12 a RN-21, RN-38 a RN-40) y la concurrencia del cupo. El dominio puro permite probar las reglas sin infraestructura y cambiar adaptadores (Postgres, OpenSearch, cliente de members) sin tocarlas.
 - **Puertos de salida:** `ClaseRepository`, `ReservaRepository`, `AsistenciaRepository`, `MembresiaChecker` (HTTP → members), `AlumnoDirectory` (HTTP → members), `EventPublisher` (outbox), `ClaseReadModel` (OpenSearch), `Clock`.
-- **Puertos de entrada:** HTTP (Gin) y consumidor AMQP.
+- **Puertos de entrada:** contratos de los casos de uso ofrecidos por `application`, por ejemplo reservar/cancelar una clase, registrar un ingreso y procesar hechos consumidos.
+- **Adaptadores de entrada:** handlers HTTP con Gin y consumidores AMQP; traducen la interacción externa y llaman a los puertos de entrada.
 - **CQRS de lectura:** las búsquedas de clases disponibles (`GET /clases?actividad=&fecha=`) se resuelven en OpenSearch; **toda escritura y toda validación** (cupo, duplicados, superposición) se hacen contra PostgreSQL. La ocupación mostrada en listados es eventualmente consistente; la reserva nunca lo es.
 - **Concurrencia del cupo (RN-14):** actualización condicional atómica sobre la clase (`ocupacion < capacidad`) o bloqueo de fila, en la misma transacción que inserta la reserva. Restricciones únicas parciales para "una reserva CONFIRMADA por alumno y clase". Detalle en ADR-003.
 - **2 instancias detrás de Traefik:** sin estado en memoria. Los procesos programados (marcar ausencias al finalizar clases, relay del outbox) se coordinan con `pg_advisory_lock` / `FOR UPDATE SKIP LOCKED` para no ejecutarse dos veces.
@@ -219,7 +220,7 @@ flowchart LR
 
 #### training-service — Capas
 
-- **Por qué capas:** operaciones de alta y consulta de documentos con validaciones de formato; sin concurrencia crítica.
+- **Por qué capas:** operaciones de alta y consulta de documentos con reglas acotadas y sin concurrencia crítica. `service` conserva las reglas y depende de interfaces implementadas por `repository`, por lo que el patrón no obliga a acoplar la lógica a MongoDB.
 - **Por qué MongoDB:** un plan de entrenamiento es un agregado jerárquico (plan → días → ejercicios) que se lee y escribe completo; las mediciones son append-only y se consultan por alumno y fecha. Ver ADR-003.
 - **Colecciones:** `planes_entrenamiento`, `planes_alimenticios`, `mediciones`, `consultas_nutricionales`.
 
@@ -682,7 +683,8 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 |---|---|---|
 | [ADR-000](adr/ADR-000-plantilla.md) | Plantilla | — |
 | [ADR-001](adr/ADR-001-limites-de-servicios.md) | D1 — Límites de servicios | Aceptado |
-| [ADR-002](adr/ADR-002-patrones-internos.md) | D2 — Patrón interno de cada servicio (Capas y Hexagonal) | Aceptado |
+| [ADR-002 original](adr/ADR-002-patrones-internos.md) | D2 — Patrón interno de cada servicio | Reemplazado por ADR-002 v2 |
+| [ADR-002 v2](adr/ADR-002-v2-patrones-internos.md) | D2 — Capas y Hexagonal; precisión de dependencias, puertos y adaptadores | Aceptado |
 | [ADR-003](adr/ADR-003-persistencia.md) | D3 — Persistencia por servicio (versión inicial) | Aceptado |
 | ADR-004 | D4 — *reservado* | — |
 | [ADR-005](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona (versión inicial) | Aceptado |

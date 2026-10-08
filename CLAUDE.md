@@ -65,14 +65,14 @@ Todo proceso Go arranca igual (ver cualquier `cmd/*/main.go`): `config.Load()` �
 
 ```text
 internal/handler/      HTTP (Gin): parseo, validación de formato, mapeo a RFC 7807
-internal/service/      reglas de negocio y orquestación
-internal/repository/   acceso a datos (interfaces + implementación)
+internal/service/      reglas de negocio, orquestación e interfaces requeridas
+internal/repository/   acceso a datos; implementa las interfaces de service
 internal/model/        entidades y DTOs
 ```
 
-Dependencias solo hacia abajo: handler → service → repository. El handler nunca usa el repository.
+El flujo es `handler → service → repository`. `service` no conoce el driver ni una implementación concreta: `cmd/` le inyecta un repositorio que implementa sus interfaces. El handler nunca usa el repository directamente.
 
-### Patrón HEXAGONAL (booking, benefits) — ADR-002
+### Patrón HEXAGONAL (booking, benefits) — [ADR-002 v2](docs/adr/ADR-002-v2-patrones-internos.md)
 
 ```text
 internal/domain/                 entidades, value objects, reglas, errores de dominio
@@ -83,7 +83,7 @@ internal/adapters/postgres/      adaptador de salida a PostgreSQL
 internal/adapters/…              amqp, opensearch, members, outbox cuando hagan falta
 ```
 
-`domain` **solo usa la biblioteca estándar** (ni Gin, ni drivers, ni `net/http`, ni `encoding/json`, ni `pkg/`) y sus structs **no llevan tags** (`json`, `db`, `gorm`, `bson`). `application` y `ports` dependen solo de `domain`. Los adaptadores implementan los puertos y hacen el mapeo de formatos. El cableado se hace en `cmd/`. Lo verifican los tests `internal/domain/architecture_test.go`: si fallan, el cambio viola el patrón.
+`domain` **solo usa la biblioteca estándar** (ni Gin, ni drivers, ni `net/http`, ni `encoding/json`, ni `pkg/`) y sus structs **no llevan tags** (`json`, `db`, `gorm`, `bson`). `ports` depende solo de `domain`; `application` depende de `domain` y de los puertos de salida. Los adaptadores de entrada (HTTP, consumidores AMQP) invocan los puertos de entrada de `application`; los adaptadores de salida implementan `ports`. El cableado se hace en `cmd/`. Lo verifican los tests `internal/domain/architecture_test.go`: si fallan, el cambio viola el patrón.
 
 ## Convenciones
 
