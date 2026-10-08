@@ -2,7 +2,7 @@
 
 > Documento de referencia de la arquitectura del proyecto. La funcionalidad está definida en [SPEC.md](../SPEC.md); las decisiones estructurales están en [docs/adr/](adr/).
 >
-> - Versión: 1.3 (garantías de consistencia entre servicios)
+> - Versión: 1.4 (orden y atomicidad de movimientos de puntos)
 > - Fecha: 2026-10-08
 > - Incluye tres decisiones agregadas y aprobadas por el equipo (2026-10-07) para cubrir huecos con el SPEC: eventos `membresia.cancelada` y `usuario.desactivado`, consulta de asignaciones training → members y consulta de datos de alumnos booking → members. Registro completo en [Registro_de_Decisiones_Gimnasio.docx](../Registro_de_Decisiones_Gimnasio.docx) (D-20 a D-23).
 
@@ -214,10 +214,10 @@ flowchart LR
 #### benefits-service — Hexagonal
 
 - **Por qué hexagonal:** es la capacidad publicada a otros grupos; su contrato (API v1) debe mantenerse estable aunque cambie la infraestructura, y el ledger tiene invariantes estrictas (RN-22 a RN-27).
-- **Ledger:** `movimientos_puntos` es append-only; el saldo se mantiene en `cuentas.saldo` actualizado en la misma transacción que inserta el movimiento, con `CHECK (saldo >= 0)`. La reversión inserta un movimiento compensatorio.
+- **Ledger:** `movimientos_puntos` es append-only; todas las escrituras bloquean la fila de la cuenta y reciben una `account_sequence` creciente. El saldo se mantiene en `cuentas.saldo`, actualizado en la misma transacción que inserta el movimiento, con `CHECK (saldo >= 0)`. La reversión inserta un movimiento compensatorio. Ver [ADR-004](adr/ADR-004-orden-movimientos-puntos.md).
 - **Cuentas:** el alta confirmada en `members-service` registra `alumno.creado` mediante outbox; `benefits-service` consume el evento y crea eventualmente una única cuenta con saldo 0. El alta no espera ni se revierte si benefits está caído. No se crean cuentas para personas que no sean alumnos; una vinculación o una operación posterior nunca crea una cuenta por sí sola.
 - **API v1 de partners:** `/partner-api/v1/...` con API key (`X-API-Key`, guardada como hash) e `Idempotency-Key` obligatorio en escrituras. Contrato publicado: [docs/contracts/benefits-api.v1.yaml](contracts/benefits-api.v1.yaml) (OpenAPI 3.1, v1.0.0), guía para consumidores en [docs/contracts/README.md](contracts/README.md) y decisión en [ADR-008](adr/ADR-008-contrato-propio.md). Las rutas públicas son `/partner-api/v1/accounts/{externalUserId}/...` y usan inglés y `camelCase` (excepción a §12.2).
-- **Idempotencia de asistencia e inasistencia:** restricciones únicas sobre `movimientos_puntos.origen_asistencia_id` y `movimientos_puntos.origen_reserva_id` además del registro de mensajes procesados. La penalización se calcula como `min(100, saldo_actual)` dentro de la transacción.
+- **Idempotencia de asistencia e inasistencia:** restricciones únicas sobre `movimientos_puntos.origen_asistencia_id` y `movimientos_puntos.origen_reserva_id` además del registro de mensajes procesados. La penalización se calcula como `min(100, saldo_actual)` bajo el bloqueo de la cuenta; con saldo 0 se registra un movimiento de 0 para cerrar el efecto de forma auditable.
 
 #### training-service — Capas
 
@@ -347,6 +347,7 @@ Todos los eventos viajan con la misma envoltura JSON. La routing key es el nombr
 Notas:
 - `membresia.activada` lleva nombre y email (**event-carried state transfer**) para que el worker no dependa de members-service. Es dato personal: el worker no lo registra en logs.
 - `asistencia.registrada` solo se publica para ingresos válidos y dispara +500 puntos. `inasistencia.registrada` se publica al cerrar la clase para aplicar hasta -100 puntos; ambos eventos se consumen idempotentemente.
+- Benefits no presupone orden entre esos eventos: los serializa por cuenta y asigna una secuencia al confirmarlos. `occurred_at` conserva el momento del hecho, pero no reordena el ledger (ADR-004).
 - `clase.actualizada` se publica en **cada** cambio que afecte la vista: alta, cambio de capacidad/responsable, cancelación, y cada reserva o cancelación (cambia `ocupacion`). El campo `version` permite descartar mensajes fuera de orden.
 - Los esquemas JSON formales vivirán en `docs/events/` (etapa siguiente).
 
@@ -384,6 +385,7 @@ Servicios con outbox: `members-service`, `booking-service`. (benefits y training
 - Además, restricciones de negocio actúan como segunda barrera (ej. único `origen_asistencia_id` en el ledger).
 - **ACK después del efecto.** Si el proceso muere antes del ACK, el mensaje se reentrega y se descarta por duplicado.
 - `prefetch` acotado (10) para no acaparar mensajes.
+- En benefits, todos los consumidores y endpoints que afectan saldo bloquean la misma fila de cuenta; así comparten un único orden de aplicación con créditos, débitos, canjes y reversiones HTTP.
 
 ### 8.4 Idempotencia de requests HTTP
 
@@ -678,6 +680,7 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | L-15 | **MongoDB standalone** (ADR-003 prevé un replica set de 1 nodo). | Sin transacciones multi-documento. | Ninguna operación las necesita todavía; se pasa a replica set cuando un caso de uso lo requiera. |
 | L-16 | **booking-service con 1 réplica y sin Traefik** en el esqueleto. | No se demuestra balanceo todavía. | Se agrega en la etapa de balanceo (2 réplicas + Traefik con health checks). |
 | L-17 | **Healthchecks de compose sobre `/health/ready`**. | Si la base de un servicio cae, Docker lo marca *unhealthy* (no lo reinicia). | Es lo esperado: el estado se ve en `/api/v1/status`. |
+| L-18 | **Acreditaciones y penalizaciones no son conmutativas.** Dos operaciones concurrentes pueden dejar saldo 400 o 500 según cuál se aplique primero. | El resultado no se deduce solo de la fecha del hecho. | Bloqueo de cuenta, secuencia creciente y fechas de hecho/aplicación diferenciadas; orden auditable según ADR-004. |
 
 ---
 
@@ -690,7 +693,7 @@ El requisito externo es que **otros grupos puedan consumir la API v1 de puntos**
 | [ADR-002 original](adr/ADR-002-patrones-internos.md) | D2 — Patrón interno de cada servicio | Reemplazado por ADR-002 v2 |
 | [ADR-002 v2](adr/ADR-002-v2-patrones-internos.md) | D2 — Capas y Hexagonal; precisión de dependencias, puertos y adaptadores | Aceptado |
 | [ADR-003](adr/ADR-003-persistencia.md) | D3 — Persistencia por servicio (versión inicial) | Aceptado |
-| ADR-004 | D4 — *reservado* | — |
+| [ADR-004](adr/ADR-004-orden-movimientos-puntos.md) | D4 — Orden, atomicidad y consistencia del ledger de puntos | Aceptado |
 | [ADR-005 original](adr/ADR-005-comunicacion.md) | D5 — Comunicación síncrona y asíncrona | Reemplazado por ADR-005 v2 |
 | [ADR-005 v2](adr/ADR-005-v2-comunicacion.md) | D5 — Comunicación y garantías entre servicios | Aceptado |
 | ADR-006, ADR-007 | D6, D7 — *reservados* | — |

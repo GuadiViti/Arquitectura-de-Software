@@ -3,7 +3,7 @@
 > Especificación funcional del Trabajo Práctico Integrador de Arquitectura de Software (microservicios).
 > Este documento es la **referencia funcional** durante todo el desarrollo. No define tecnologías, lenguajes, frameworks ni modelos de base de datos.
 >
-> - Versión: 0.7 (garantías de consistencia entre servicios)
+> - Versión: 0.8 (orden de aplicación de movimientos de puntos)
 > - Fecha: 2026-10-08
 > - Convenciones: `HU-xx` = historia de usuario, `RN-xx` = regla de negocio, `CU-xx` = caso de uso, `CL-xx` = caso límite, `E2E-xx` = criterio de aceptación de punta a punta. Las palabras **DEBE**, **NO DEBE** y **PUEDE** tienen sentido normativo.
 
@@ -446,7 +446,7 @@ Reglas: RN-30.
 
 #### HU-22 — Registrar ingreso y asistencia automáticamente
 *Como alumno, quiero ingresar al gimnasio con mi DNI, para que el sistema registre automáticamente mi asistencia a la clase reservada.*
-Reglas: RN-19, RN-20, RN-21, RN-38.
+Reglas: RN-19, RN-20, RN-21, RN-38, RN-42.
 
 - **CA-22.1** Dada una clase iniciada de Funcional y una reserva CONFIRMADA, cuando el alumno ingresa su DNI, entonces el sistema valida su membresía, crea la asistencia, pasa la reserva a ASISTIDA y acredita +500 puntos una única vez.
 - **CA-22.2** Dada una clase iniciada de Musculación, cuando el alumno ingresa su DNI, entonces se registra la asistencia y se acreditan +500 puntos.
@@ -458,7 +458,7 @@ Reglas: RN-19, RN-20, RN-21, RN-38.
 - **CA-22.8** Dada una reserva CONFIRMADA que llega al final de la clase sin ingreso registrado, entonces la reserva pasa automáticamente a AUSENTE, no se acreditan puntos por asistencia y se genera una penalización de hasta 100 puntos, aplicada una única vez y sin dejar saldo negativo (RN-38).
 - **CA-22.9** Dada una ausencia pendiente de penalización y un saldo de 500, sin otros movimientos concurrentes, cuando se procesa la penalización, entonces se descuentan 100 puntos y el saldo queda en 400.
 - **CA-22.10** Dada una ausencia pendiente de penalización y un saldo de 50, sin otros movimientos concurrentes, cuando se procesa la penalización, entonces se descuentan 50 puntos y el saldo queda en 0.
-- **CA-22.11** Dada una ausencia pendiente de penalización y saldo 0, sin otros movimientos concurrentes, cuando se procesa la penalización, entonces el saldo permanece en 0 y la ausencia queda procesada para impedir que una reentrega la penalice después.
+- **CA-22.11** Dada una ausencia pendiente de penalización y saldo 0, sin otros movimientos concurrentes, cuando se procesa la penalización, entonces se registra un movimiento de 0 puntos, el saldo permanece en 0 y la ausencia queda procesada para impedir que una reentrega la penalice después.
 - **CA-22.12** Dada una ausencia cuya penalización ya se procesó, cuando el mismo hecho se entrega nuevamente, entonces no se aplica otro descuento, aunque el saldo haya cambiado.
 
 #### HU-23 — Gestionar plan de entrenamiento
@@ -500,11 +500,12 @@ Reglas: RN-30, RN-37.
 
 #### HU-26 — Acreditar puntos por asistencia
 *Como proceso automático del sistema, quiero acreditar puntos ante cada asistencia confirmada, para premiar la constancia.*
-Reglas: RN-20, RN-21, RN-22.
+Reglas: RN-20, RN-21, RN-22, RN-42.
 
 - **CA-26.1** Dada una asistencia ASISTIÓ de Zumba, cuando se procesa, entonces se crea un movimiento CONFIRMADO de +500 con motivo "Asistencia Zumba <fecha hora>" vinculado a esa asistencia. El mismo valor de 500 puntos corresponde a cualquier actividad (RN-20).
 - **CA-26.2** Dado que el evento de asistencia se entrega dos veces, cuando se procesa por segunda vez, entonces no se crea un segundo movimiento.
 - **CA-26.3** Dado que el Club de Beneficios no está disponible al registrar la asistencia, cuando vuelve a estar disponible, entonces la acreditación se realiza (consistencia eventual), sin perder ni duplicar puntos.
+- **CA-26.4** Dada una cuenta con saldo 0 y una acreditación de +500 y una penalización de hasta -100 listas para procesarse concurrentemente, cuando el Club aplica ambas, entonces las serializa y asigna una secuencia única: si la penalización se aplica primero, registra 0 y el saldo final es 500; si la acreditación se aplica primero, registra -100 y el saldo final es 400. El historial muestra el orden aplicado y ninguna ejecución deja saldo negativo.
 
 #### HU-27 — Vencer membresías automáticamente
 *Como proceso automático del sistema, quiero vencer las membresías al terminar su período, para que el estado refleje la realidad.*
@@ -614,7 +615,7 @@ Reglas: RN-26.
 | **RN-19** | **Ingreso y asistencia automática.** El alumno registra su ingreso mediante DNI. El sistema valida que esté ACTIVO, tenga membresía vigente y posea una reserva CONFIRMADA en una clase EN_CURSO; si se cumplen las condiciones, crea la asistencia y pasa la reserva a ASISTIDA. El profesor no registra asistencia manualmente. |
 | **RN-20** | **Puntos por asistencia.** Una asistencia automática con resultado **ASISTIÓ** genera **500 puntos**, sin importar la actividad. El valor se registra en el movimiento al momento del ingreso. |
 | **RN-21** | **Unicidad de asistencia y de acreditación.** Cada reserva tiene como máximo un registro de asistencia, que no se modifica. Cada asistencia automática genera **exactamente un** movimiento de acreditación, aunque el ingreso o el evento se procesen más de una vez. |
-| **RN-38** | **Ausencia automática y penalización.** Al finalizar una clase, el sistema pasa a AUSENTE todas sus reservas CONFIRMADA que no tengan asistencia registrada y genera una penalización de hasta **-100 puntos**. La penalización nunca deja el saldo por debajo de 0 y se procesa exactamente una vez. No se requiere acción del profesor ni del administrador. |
+| **RN-38** | **Ausencia automática y penalización.** Al finalizar una clase, el sistema pasa a AUSENTE todas sus reservas CONFIRMADA que no tengan asistencia registrada y genera una penalización de hasta **-100 puntos**. La penalización nunca deja el saldo por debajo de 0, se aplica conforme al orden de RN-42 y se procesa exactamente una vez. No se requiere acción del profesor ni del administrador. |
 
 ### 5.5 Club de Beneficios
 
@@ -624,6 +625,7 @@ Reglas: RN-26.
 | **RN-23** | **Saldo no negativo.** Ninguna operación (débito, canje, reversión) puede dejar el saldo por debajo de 0. La verificación de saldo y el débito son atómicos, aun ante operaciones concurrentes sobre la misma cuenta. |
 | **RN-24** | **Canje.** Requiere beneficio ACTIVO, dentro de su vigencia, y saldo ≥ costo vigente del beneficio. Los beneficios **no tienen stock**: siempre están disponibles mientras estén activos y vigentes. El administrador puede cambiar costo, descripción y vigencia en cualquier momento; los canjes ya hechos conservan los puntos debitados. El canje genera un canje y un débito por el costo, de forma atómica (o ambos o ninguno). Para partners, el beneficio debe estar habilitado para canje vía partner. |
 | **RN-25** | **Reversión.** Solo el administrador revierte movimientos, indicando motivo. Un movimiento solo se revierte una vez. Anular un canje revierte su débito. Revertir una acreditación por asistencia no modifica el registro de asistencia. |
+| **RN-42** | **Orden de aplicación de movimientos.** Todas las operaciones que afectan una cuenta se aplican de a una y reciben una secuencia estrictamente creciente dentro de esa cuenta. La penalización por inasistencia se calcula como `min(100, saldo)` usando el saldo existente cuando se aplica su operación. La fecha del hecho se conserva para trazabilidad, pero no reordena movimientos ya confirmados. Ante operaciones concurrentes, cualquiera puede aplicarse primero; el orden confirmado y su resultado quedan determinados por la secuencia de la cuenta. Una penalización aplicada con saldo 0 registra un movimiento de 0 y se considera procesada. |
 
 ### 5.6 Partners
 
@@ -679,7 +681,7 @@ Reglas: RN-26.
 | **Medición** | id, alumno, nutricionista, fecha, peso, % grasa, % muscular, masa muscular, observaciones, fecha de registro |
 | **ConsultaNutricional** | id, alumno, nutricionista, pregunta, fecha-hora de envío, respuesta, fecha-hora de respuesta, estado (PENDIENTE/RESPONDIDA) |
 | **CuentaBeneficios** | id, alumno titular, saldo (derivado), fecha de alta |
-| **MovimientoPuntos** | id, cuenta, fecha-hora, tipo (ACREDITACIÓN_ASISTENCIA, PENALIZACIÓN_INASISTENCIA, ACREDITACIÓN_PARTNER, DÉBITO_PARTNER, CANJE, REVERSIÓN), puntos (con signo), motivo, origen (asistencia / inasistencia / canje / operación de partner / administrador), estado (CONFIRMADO/REVERTIDO), movimiento revertido (si es compensatorio) |
+| **MovimientoPuntos** | id, cuenta, secuencia de cuenta, fecha-hora del hecho, fecha-hora de aplicación, tipo (ACREDITACIÓN_ASISTENCIA, PENALIZACIÓN_INASISTENCIA, ACREDITACIÓN_PARTNER, DÉBITO_PARTNER, CANJE, REVERSIÓN), puntos (con signo; puede ser 0 para una penalización aplicada sin saldo), motivo, origen (asistencia / inasistencia / canje / operación de partner / administrador), estado (CONFIRMADO/REVERTIDO), movimiento revertido (si es compensatorio) |
 | **Beneficio** | id, nombre, descripción, costo en puntos, vigencia desde/hasta, habilitado para partners (sí/no), estado (ACTIVO/INACTIVO) |
 | **Canje** | id, cuenta, beneficio, puntos, fecha-hora, canal (ALUMNO/PARTNER), estado (CONFIRMADO/ANULADO), movimiento de débito asociado |
 | **Partner** | id, nombre, contacto, estado (ACTIVO/INACTIVO), credenciales (referencia) |
@@ -838,7 +840,7 @@ stateDiagram-v2
 
 | Desde | Hacia | Evento | Válida |
 |---|---|---|---|
-| — | CONFIRMADO | Acreditación por asistencia, acreditación/débito de partner, canje, movimiento compensatorio | ✅ (solo si la operación es válida; una operación rechazada **no** crea movimiento) |
+| — | CONFIRMADO | Acreditación por asistencia, penalización por inasistencia, acreditación/débito de partner, canje, movimiento compensatorio | ✅ (solo si la operación es válida; una penalización con saldo 0 crea un movimiento de 0; una operación rechazada **no** crea movimiento) |
 | CONFIRMADO | REVERTIDO | Reversión por admin (crea un movimiento compensatorio CONFIRMADO de signo opuesto) | ✅ si el saldo resultante ≥ 0 |
 | REVERTIDO | CONFIRMADO | Des-revertir | ❌ |
 | REVERTIDO | REVERTIDO | Revertir de nuevo | ❌ |
@@ -846,6 +848,8 @@ stateDiagram-v2
 | cualquiera | — | Editar puntos/motivo o eliminar | ❌ |
 
 > Los movimientos nacen CONFIRMADOS porque la validación y la escritura son atómicas. Las operaciones de partner rechazadas quedan registradas como **OperaciónPartner** (para idempotencia), no como movimientos.
+>
+> El orden que afecta el saldo es la secuencia asignada al aplicar cada operación en el Club de Beneficios. La fecha del hecho no modifica movimientos ya confirmados (RN-42).
 
 ### 7.5 Estados auxiliares (referencia)
 
@@ -971,13 +975,13 @@ stateDiagram-v2
 |---|---|
 | Disparador | Proceso automático del sistema (disparado por CU-03) |
 | Precondiciones | Existe una asistencia ASISTIÓ. |
-| Reglas | RN-20, RN-21, RN-22 |
+| Reglas | RN-20, RN-21, RN-22, RN-42 |
 
 **Flujo principal**
 1. El Club de Beneficios recibe el hecho "asistencia confirmada".
 2. Verifica si ya existe un movimiento cuyo origen sea esa asistencia. Si existe, descarta el hecho (fin).
-3. Crea un movimiento CONFIRMADO de +500 puntos en la cuenta del alumno, con motivo "Asistencia <actividad> <fecha hora>" y origen = id de asistencia.
-4. El saldo se actualiza.
+3. Bloquea la cuenta, asigna la siguiente secuencia y crea un movimiento CONFIRMADO de +500 puntos con motivo "Asistencia <actividad> <fecha hora>" y origen = id de asistencia.
+4. El saldo se actualiza en la misma transacción.
 
 **Alternativos**
 - 1a. El Club no está disponible → el hecho se conserva y se reintenta hasta procesarse (no se pierde).
@@ -1221,7 +1225,7 @@ stateDiagram-v2
 | HU-08 Modificar/cancelar clase | RN-10, RN-11, RN-32 |
 | HU-09 Catálogo de beneficios | RN-24 |
 | HU-10 Partners y vinculaciones | RN-26, RN-27 |
-| HU-11 Revertir movimiento | RN-22, RN-23, RN-25 |
+| HU-11 Revertir movimiento | RN-22, RN-23, RN-25, RN-42 |
 | HU-12 Consultar membresía | RN-01, RN-30 |
 | HU-13 Consultar clases | RN-11, RN-12 |
 | HU-14 Reservar | RN-01, RN-12, RN-13, RN-14, RN-15, RN-16, RN-39, RN-40 |
@@ -1229,19 +1233,19 @@ stateDiagram-v2
 | HU-16 Mis reservas | RN-30 |
 | HU-17 Mi plan de entrenamiento | RN-28, RN-30 |
 | HU-18 Plan nutricional y mediciones | RN-29, RN-30, RN-31 |
-| HU-19 Saldo y movimientos | RN-22, RN-30 |
-| HU-20 Canjear | RN-22, RN-23, RN-24 |
+| HU-19 Saldo y movimientos | RN-22, RN-30, RN-42 |
+| HU-20 Canjear | RN-22, RN-23, RN-24, RN-42 |
 | HU-21 Mis clases y alumnos | RN-30 |
-| HU-22 Ingreso y asistencia automática | RN-19, RN-20, RN-21, RN-38 |
+| HU-22 Ingreso y asistencia automática | RN-19, RN-20, RN-21, RN-38, RN-42 |
 | HU-23 Plan de entrenamiento | RN-28, RN-30 |
 | HU-24 Plan alimenticio | RN-29, RN-30 |
 | HU-25 Medición | RN-31 |
-| HU-26 Puntos por asistencia | RN-20, RN-21, RN-22 |
+| HU-26 Puntos por asistencia | RN-20, RN-21, RN-22, RN-42 |
 | HU-27 Vencimiento automático | RN-01, RN-03 |
 | HU-28 Email de membresía | RN-05 |
-| HU-29 Acreditar (partner) | RN-22, RN-26, RN-27 |
-| HU-30 Debitar (partner) | RN-22, RN-23, RN-26, RN-27 |
-| HU-31 Canjear (partner) | RN-24, RN-26, RN-27 |
+| HU-29 Acreditar (partner) | RN-22, RN-26, RN-27, RN-42 |
+| HU-30 Debitar (partner) | RN-22, RN-23, RN-26, RN-27, RN-42 |
+| HU-31 Canjear (partner) | RN-24, RN-26, RN-27, RN-42 |
 | HU-32 Consultar (partner) | RN-26 |
 | HU-33 Enviar consulta nutricional | RN-30, RN-37 |
 | HU-34 Responder consultas (nutricionista) | RN-30, RN-37 |
@@ -1249,7 +1253,7 @@ stateDiagram-v2
 
 ---
 
-## Anexo A — Decisiones confirmadas y actualizaciones (v0.7)
+## Anexo A — Decisiones confirmadas y actualizaciones (v0.8)
 
 | ID | Tema | Decisión | Dónde impacta |
 |---|---|---|---|
@@ -1287,3 +1291,7 @@ Se alinean historias, validaciones, estados, casos de uso y escenarios de acepta
 ### Garantías entre servicios — v0.7 (2026-10-08)
 
 Se explicitan las garantías posibles entre bases y sistemas independientes: la validación de membresía al reservar es fresca pero no constituye una transacción distribuida; las carreras con cancelaciones convergen mediante propagación asíncrona. La cuenta de beneficios se crea de forma eventual sin bloquear el alta. Las notificaciones se deduplican como efectos lógicos, mientras que SMTP conserva una ventana de posible duplicación ante resultado indeterminado.
+
+### Orden de movimientos — v0.8 (2026-10-08)
+
+Se define como orden canónico la secuencia en que benefits aplica las operaciones bajo bloqueo de la cuenta. La penalización usa el saldo disponible en ese momento; la fecha del hecho se conserva como dato histórico y no provoca el recálculo de movimientos inmutables. Esta regla hace explícito el resultado posible de acreditaciones y penalizaciones concurrentes.
